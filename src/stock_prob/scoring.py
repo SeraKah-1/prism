@@ -102,8 +102,6 @@ def dm_test(
     d_t = (p_model - y)^2 - (p_base - y)^2
     H0: E[d_t] = 0 vs H1: E[d_t] < 0 (model has lower Brier score)
     """
-    import statsmodels.api as sm
-
     y = np.asarray(y_true, dtype=float)
     p1 = np.asarray(p_model, dtype=float)
     p0 = np.asarray(p_base, dtype=float)
@@ -119,14 +117,36 @@ def dm_test(
         }
 
     d = (p1[m] - y[m]) ** 2 - (p0[m] - y[m]) ** 2
-    X = np.ones((len(d), 1))
-
     max_lags = max(1, int(h) - 1)
-    res = sm.OLS(d, X).fit(cov_type="HAC", cov_kwds={"maxlags": max_lags})
 
-    t_stat = float(res.tvalues[0])
-    p_two_sided = float(res.pvalues[0])
-    p_one_sided = p_two_sided / 2.0 if t_stat < 0 else 1.0 - (p_two_sided / 2.0)
+    try:
+        import statsmodels.api as sm
+        X = np.ones((len(d), 1))
+        res = sm.OLS(d, X).fit(cov_type="HAC", cov_kwds={"maxlags": max_lags})
+        t_stat = float(res.tvalues[0])
+        p_two_sided = float(res.pvalues[0])
+    except Exception:
+        # Pure analytical Newey-West HAC variance calculation
+        d_mean = float(np.mean(d))
+        d_zero = d - d_mean
+        n = len(d)
+        gamma0 = float(np.mean(d_zero ** 2))
+        gamma_sum = 0.0
+        for k in range(1, max_lags + 1):
+            if k < n:
+                w = 1.0 - k / (max_lags + 1.0)
+                g_k = float(np.mean(d_zero[k:] * d_zero[:-k]))
+                gamma_sum += 2.0 * w * g_k
+        hac_var = max(1e-12, (gamma0 + gamma_sum) / n)
+        hac_se = np.sqrt(hac_var)
+        t_stat = float(d_mean / hac_se) if hac_se > 0 else 0.0
+        try:
+            from scipy.stats import norm
+            p_two_sided = float(2.0 * (1.0 - norm.cdf(abs(t_stat))))
+        except Exception:
+            p_two_sided = float("nan")
+
+    p_one_sided = p_two_sided / 2.0 if t_stat < 0 else 1.0 - (p_two_sided / 2.0) if p_two_sided == p_two_sided else float("nan")
 
     return {
         "dm_stat": t_stat,

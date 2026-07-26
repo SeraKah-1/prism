@@ -94,6 +94,27 @@ def validate_brier_delta(brier_old: float, brier_new: float, threshold: float = 
     return float(brier_new - brier_old) <= threshold
 
 
+def apply_adaptive_r2_selection(
+    feats: pd.DataFrame,
+    r2_market: float | None = None,
+    threshold: float = 0.70,
+) -> pd.DataFrame:
+    """
+    Adaptive R² Feature Selection:
+    If stock movement is heavily market-driven (R² > 0.70), drop noisy short-term technicals (ret_1d, mom_5)
+    and keep structural beta/volatility features.
+    """
+    if feats is None or len(feats) == 0 or r2_market is None or not np.isfinite(r2_market):
+        return feats
+
+    out = feats.copy()
+    if float(r2_market) > threshold:
+        drop_cols = [c for c in ("mom_5", "ret_1d") if c in out.columns]
+        if drop_cols:
+            out = out.drop(columns=drop_cols)
+    return out
+
+
 def feature_columns(df: pd.DataFrame) -> list[str]:
     skip = {"close"}
     return [c for c in df.columns if c not in skip and pd.api.types.is_numeric_dtype(df[c])]

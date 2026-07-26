@@ -276,3 +276,30 @@ def decision_html(d: dict[str, Any], *, last_price: float | None = None) -> str:
   <p class="hint" style="margin-top:10px">{d.get('disclaimer', '')}</p>
 </div>
 """
+
+
+def check_model_staleness(last_fit_date: str | None, max_days: int = 14) -> dict[str, Any]:
+    """Check if fitted model weights are older than max_days."""
+    if not last_fit_date:
+        return {"is_stale": False, "days_old": 0, "badge": ""}
+    try:
+        fit_dt = pd.to_datetime(last_fit_date).tz_localize(None)
+        now_dt = pd.Timestamp.now()
+        days_old = int((now_dt - fit_dt).days)
+        is_stale = days_old > max_days
+        badge = f"⚠ Model last fitted {days_old} days ago" if is_stale else ""
+        return {"is_stale": is_stale, "days_old": days_old, "badge": badge}
+    except Exception:
+        return {"is_stale": False, "days_old": 0, "badge": ""}
+
+
+def compute_ensemble_disagreement(probs: dict[str, float]) -> dict[str, Any]:
+    """Compute spread across model predictions as an explicit uncertainty metric."""
+    if not probs:
+        return {"spread": 0.0, "agreement": "UNKNOWN"}
+    valid = [float(v) for v in probs.values() if v == v and np.isfinite(v)]
+    if len(valid) < 2:
+        return {"spread": 0.0, "agreement": "HIGH"}
+    spread = float(max(valid) - min(valid))
+    agreement = "HIGH" if spread < 0.08 else ("MODERATE" if spread < 0.15 else "LOW")
+    return {"spread": spread, "agreement": agreement}
