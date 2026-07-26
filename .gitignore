@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+.env
+*.egg-info/
+dist/
+build/
+
+# data lake & secrets
+data/**/*.parquet
+data/raw/
+predictions/ledger*.parquet
+predictions/ledger_tail.csv
+runs/
+exports/gallery/
+exports/*.xlsx
+*.xlsx
+
+# keep tiny fixtures if added later
+!tests/fixtures/**/*.csv
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/

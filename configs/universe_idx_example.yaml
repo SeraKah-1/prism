@@ -1,0 +1,16 @@
+# Example universe A — IDX-focused (symbols are data, not code)
+name: universe_idx_example
+run_name: idx_demo
+horizons: [5, 21, 252]
+history_period: "5y"
+rolling_window: 60
+mc_paths: 1500
+walkforward_refit_every: 21
+min_train_rows: 252
+
+universe:
+  equities:
+    - BBCA.JK
+  domestic_index: "^JKSE"
+  us_index: "^GSPC"
+  macro: "^VIX"

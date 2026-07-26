@@ -1,0 +1,28 @@
+# Core multi-ticker panel (IDX + US) — all symbols data, not code constants
+name: panel_core
+run_name: panel_core
+horizons: [5, 21, 252]
+history_period: "5y"
+mc_paths: 500
+min_train_rows: 200
+
+# Used by scripts/run_full_lab.py
+equities:
+  # IDX
+  - BBCA.JK
+  - BBRI.JK
+  - TLKM.JK
+  - ASII.JK
+  - BMRI.JK
+  # US
+  - AAPL
+  - MSFT
+  - GOOGL
+  - JPM
+  - XOM
+
+defaults:
+  domestic_index_idx: "^JKSE"
+  domestic_index_us: "^GSPC"
+  us_index: "^GSPC"
+  macro: "^VIX"
