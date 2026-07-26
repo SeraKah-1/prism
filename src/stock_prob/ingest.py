@@ -300,3 +300,12 @@ def align_close_panel(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
     if not series:
         return pd.DataFrame()
     return pd.concat(series, axis=1).sort_index()
+
+
+def align_us_to_idx(us_series: pd.Series, idx_dates: pd.DatetimeIndex | pd.Series) -> pd.Series:
+    """Single Source of Truth: Align US close prices/returns to IDX dates (overnight lag)."""
+    us = us_series.astype(float).copy()
+    us.index = pd.to_datetime(us.index).tz_localize(None)
+    us_shifted = us.shift(1)
+    idx_idx = pd.to_datetime(idx_dates).tz_localize(None)
+    return us_shifted.reindex(idx_idx).ffill()

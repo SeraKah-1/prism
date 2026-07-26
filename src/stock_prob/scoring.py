@@ -88,3 +88,50 @@ def reliability_bins(y_true, p_up, n_bins: int = 10) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+def dm_test(
+    y_true: np.ndarray | pd.Series,
+    p_model: np.ndarray | pd.Series,
+    p_base: np.ndarray | pd.Series,
+    h: int = 1,
+    min_obs: int = 10,
+) -> dict[str, float | int]:
+    """
+    Diebold-Mariano test with Newey-West (HAC) standard error.
+    d_t = (p_model - y)^2 - (p_base - y)^2
+    H0: E[d_t] = 0 vs H1: E[d_t] < 0 (model has lower Brier score)
+    """
+    import statsmodels.api as sm
+
+    y = np.asarray(y_true, dtype=float)
+    p1 = np.asarray(p_model, dtype=float)
+    p0 = np.asarray(p_base, dtype=float)
+    m = np.isfinite(y) & np.isfinite(p1) & np.isfinite(p0)
+    n_obs = int(m.sum())
+    if n_obs < min_obs:
+        return {
+            "dm_stat": float("nan"),
+            "p_value_two_sided": float("nan"),
+            "p_value_one_sided": float("nan"),
+            "mean_diff": float("nan"),
+            "n_obs": n_obs,
+        }
+
+    d = (p1[m] - y[m]) ** 2 - (p0[m] - y[m]) ** 2
+    X = np.ones((len(d), 1))
+
+    max_lags = max(1, int(h) - 1)
+    res = sm.OLS(d, X).fit(cov_type="HAC", cov_kwds={"maxlags": max_lags})
+
+    t_stat = float(res.tvalues[0])
+    p_two_sided = float(res.pvalues[0])
+    p_one_sided = p_two_sided / 2.0 if t_stat < 0 else 1.0 - (p_two_sided / 2.0)
+
+    return {
+        "dm_stat": t_stat,
+        "p_value_two_sided": p_two_sided,
+        "p_value_one_sided": p_one_sided,
+        "mean_diff": float(np.mean(d)),
+        "n_obs": n_obs,
+    }
