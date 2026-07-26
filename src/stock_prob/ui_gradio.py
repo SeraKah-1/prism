@@ -90,7 +90,7 @@ def _gradio_safe_file(src: Path) -> str:
 PRISM_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap');
 
-:root {
+:root, .dark, body.dark, .gradio-container, .gradio-container.dark {
   --bg: #f6f3ee;
   --card: #fffcf7;
   --fg: #1c1917;
@@ -100,6 +100,38 @@ PRISM_CSS = """
   --radius: 16px;
   --gap: 16px;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --body-text-color: #1c1917 !important;
+  --block-label-text-color: #1c1917 !important;
+  --block-title-text-color: #1c1917 !important;
+  --panel-text-color: #1c1917 !important;
+  --table-text-color: #1c1917 !important;
+  --checkbox-label-text-color: #1c1917 !important;
+  --radio-label-text-color: #1c1917 !important;
+  --input-text-color: #1c1917 !important;
+  --body-text-color-subdued: #78716c !important;
+}
+
+.gradio-container,
+.gradio-container *,
+.gradio-container label,
+.gradio-container span,
+.gradio-container p,
+.gradio-container h1,
+.gradio-container h2,
+.gradio-container h3,
+.gradio-container h4,
+.gradio-container input,
+.gradio-container select,
+.gradio-container textarea,
+.gradio-container table,
+.gradio-container td,
+.gradio-container th,
+.gradio-container .block-title,
+.gradio-container .block-label,
+.gradio-container [data-testid="block-label"],
+.gradio-container fieldset span,
+.gradio-container .wrap span {
+  color: #1c1917;
 }
 
 .gradio-container {
@@ -771,7 +803,7 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
                 from stock_prob.ingest import align_close_panel, fetch_universe
 
                 ctx_syms = [symbol, domestic, us_index, macro]
-                frames = fetch_universe([s for s in ctx_syms if s], period="5y", use_cache=True)
+                frames = fetch_universe([s for s in ctx_syms if s], period="max", use_cache=True)
                 panel = align_close_panel(frames)
                 if symbol in panel.columns:
                     eq = panel[symbol].dropna()

@@ -188,7 +188,7 @@ def _download_yf(symbol: str, *, period: str | None = None, start: str | None = 
         )
     else:
         raw = yf.download(
-            symbol, period=period or "5y", progress=False, threads=False, auto_adjust=True
+            symbol, period=period or "max", progress=False, threads=False, auto_adjust=True
         )
     return _normalize_ohlcv(raw, symbol)
 
@@ -196,7 +196,7 @@ def _download_yf(symbol: str, *, period: str | None = None, start: str | None = 
 def fetch_symbol(
     symbol: str,
     *,
-    period: str = "5y",
+    period: str = "max",
     use_cache: bool = True,
     force_refresh: bool = False,
     sleep_s: float = 0.25,
@@ -265,7 +265,7 @@ def fetch_symbol(
 def fetch_universe(
     symbols: Iterable[str],
     *,
-    period: str = "5y",
+    period: str = "max",
     use_cache: bool = True,
     force_refresh: bool = False,
     min_bars: int = MIN_USEFUL_BARS,

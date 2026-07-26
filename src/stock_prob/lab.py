@@ -289,7 +289,7 @@ def run_full_lab(
     # Twins across panel symbols that fetched
     form_rows = []
     all_syms = set(equities) | {"^JKSE", "^GSPC", "^VIX"}
-    frames = fetch_universe(list(all_syms), period="5y", use_cache=use_cache)
+    frames = fetch_universe(list(all_syms), period="max", use_cache=use_cache)
     panel_px = align_close_panel(frames)
     for eq in equities:
         if eq not in panel_px.columns:

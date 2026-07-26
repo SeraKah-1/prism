@@ -45,7 +45,7 @@ class UniverseConfig:
 class RunConfig:
     universe: UniverseConfig
     horizons: list[int] = field(default_factory=lambda: [5, 21, 252])
-    history_period: str = "5y"
+    history_period: str = "max"
     rolling_window: int = 60
     mc_paths: int = 2000
     walkforward_refit_every: int = 21  # trading days between refits

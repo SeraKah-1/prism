@@ -265,11 +265,11 @@ def decision_html(d: dict[str, Any], *, last_price: float | None = None) -> str:
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">
     <div style="background:#fff;border:1px solid #e7e0d5;border-radius:12px;padding:12px">
       <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#78716c;font-weight:600">Buy reference</div>
-      <div style="font-weight:650;margin-top:4px">{buy_txt}</div>
+      <div style="font-weight:650;margin-top:4px;color:#1c1917">{buy_txt}</div>
     </div>
     <div style="background:#fff;border:1px solid #e7e0d5;border-radius:12px;padding:12px">
       <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#78716c;font-weight:600">Sell / target reference</div>
-      <div style="font-weight:650;margin-top:4px">{sell_txt}</div>
+      <div style="font-weight:650;margin-top:4px;color:#1c1917">{sell_txt}</div>
     </div>
   </div>
   <ul style="margin:12px 0 0;padding-left:18px;color:#44403c;font-size:13.5px;line-height:1.5">{bullets}</ul>

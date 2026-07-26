@@ -220,7 +220,7 @@ def _history_from_result(result: dict[str, Any], ticker: str) -> pd.DataFrame:
     try:
         from stock_prob.ingest import fetch_symbol
 
-        raw = fetch_symbol(ticker, period="5y", use_cache=True)
+        raw = fetch_symbol(ticker, period="max", use_cache=True)
         return _normalize_history(raw[["date", "close"]]).tail(500)
     except Exception:
         pass

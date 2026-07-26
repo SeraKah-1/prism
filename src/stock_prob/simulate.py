@@ -126,17 +126,17 @@ def simulate_html(sim: dict[str, Any], *, ticker: str = "") -> str:
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px">
     <div style="background:#fff;border:1px solid #e7e0d5;border-radius:12px;padding:12px">
       <div style="font-size:11px;color:#78716c;font-weight:600">Downside (p10)</div>
-      <div style="font-weight:700;margin-top:4px">{sim['p10_exit']:,.2f}</div>
+      <div style="font-weight:700;margin-top:4px;color:#1c1917">{sim['p10_exit']:,.2f}</div>
       <div style="font-size:12px;color:#b42318">{sim['p10_return_pct']:+.1f}%</div>
     </div>
     <div style="background:#fff;border:1px solid #e7e0d5;border-radius:12px;padding:12px">
       <div style="font-size:11px;color:#78716c;font-weight:600">Median (p50)</div>
-      <div style="font-weight:700;margin-top:4px">{sim['p50_exit']:,.2f}</div>
+      <div style="font-weight:700;margin-top:4px;color:#1c1917">{sim['p50_exit']:,.2f}</div>
       <div style="font-size:12px;color:#44403c">{sim['median_return_pct']:+.1f}%</div>
     </div>
     <div style="background:#fff;border:1px solid #e7e0d5;border-radius:12px;padding:12px">
       <div style="font-size:11px;color:#78716c;font-weight:600">Upside (p90)</div>
-      <div style="font-weight:700;margin-top:4px">{sim['p90_exit']:,.2f}</div>
+      <div style="font-weight:700;margin-top:4px;color:#1c1917">{sim['p90_exit']:,.2f}</div>
       <div style="font-size:12px;color:#1b7a4e">{sim['p90_return_pct']:+.1f}%</div>
     </div>
   </div>
