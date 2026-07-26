@@ -88,3 +88,35 @@ def twin_pairs(clustered: pd.DataFrame) -> pd.DataFrame:
             for j in range(i + 1, len(tickers)):
                 rows.append({"ticker_a": tickers[i], "ticker_b": tickers[j], "cluster": int(c)})
     return pd.DataFrame(rows)
+
+
+def twin_drift(old_clusters: pd.DataFrame, new_clusters: pd.DataFrame) -> pd.DataFrame:
+    """
+    Track twin cluster drift across time periods to detect statistical divergence.
+    """
+    if old_clusters is None or new_clusters is None or len(old_clusters) == 0 or len(new_clusters) == 0:
+        return pd.DataFrame(columns=["ticker", "old_cluster", "new_cluster", "status"])
+
+    old_map = dict(zip(old_clusters["ticker"], old_clusters["cluster"]))
+    new_map = dict(zip(new_clusters["ticker"], new_clusters["cluster"]))
+
+    rows = []
+    for t in set(old_map.keys()).union(new_map.keys()):
+        c_old = old_map.get(t)
+        c_new = new_map.get(t)
+        if c_old is not None and c_new is not None:
+            status = "STABLE" if c_old == c_new else "DRIFTED"
+        elif c_old is None:
+            status = "NEW"
+        else:
+            status = "DROPPED"
+        rows.append(
+            {
+                "ticker": t,
+                "old_cluster": c_old,
+                "new_cluster": c_new,
+                "status": status,
+            }
+        )
+
+    return pd.DataFrame(rows).sort_values("status").reset_index(drop=True)

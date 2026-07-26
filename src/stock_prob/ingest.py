@@ -309,3 +309,67 @@ def align_us_to_idx(us_series: pd.Series, idx_dates: pd.DatetimeIndex | pd.Serie
     us_shifted = us.shift(1)
     idx_idx = pd.to_datetime(idx_dates).tz_localize(None)
     return us_shifted.reindex(idx_idx).ffill()
+
+
+def fetch_sector_meta(symbols: Iterable[str], root: Path | None = None) -> pd.DataFrame:
+    """
+    Fetch sector metadata for symbols using yfinance info + yaml fallback + parquet cache.
+    Data Layer function: pure data retrieval with atomic write pattern.
+    """
+    import yaml
+
+    root = root or get_project_root()
+    paths = ensure_layout(root)
+    cache_file = paths["data"] / "sectors.parquet"
+    yaml_file = root / "configs" / "sectors.yaml"
+
+    yaml_map: dict[str, str] = {}
+    if yaml_file.exists():
+        try:
+            yaml_map = yaml.safe_load(yaml_file.read_text()) or {}
+        except Exception:
+            yaml_map = {}
+
+    cached_df = pd.DataFrame(columns=["symbol", "sector"])
+    if cache_file.exists():
+        try:
+            cached_df = pd.read_parquet(cache_file)
+        except Exception:
+            cached_df = pd.DataFrame(columns=["symbol", "sector"])
+
+    cached_map = dict(zip(cached_df["symbol"], cached_df["sector"])) if len(cached_df) else {}
+    updated = False
+    result_rows = []
+
+    for sym in symbols:
+        if not sym:
+            continue
+        sym = str(sym).strip()
+        sec = cached_map.get(sym)
+        if not sec or sec == "Unknown":
+            # try yfinance
+            try:
+                import yfinance as yf
+
+                info = yf.Ticker(sym).info or {}
+                sec = info.get("sector") or info.get("industry")
+            except Exception:
+                sec = None
+
+            if not sec:
+                sec = yaml_map.get(sym, "Unknown")
+            cached_map[sym] = sec
+            updated = True
+
+        result_rows.append({"symbol": sym, "sector": sec or "Unknown"})
+
+    out_df = pd.DataFrame(result_rows).drop_duplicates("symbol").reset_index(drop=True)
+    if updated:
+        try:
+            tmp = cache_file.with_suffix(".tmp")
+            out_df.to_parquet(tmp, index=False)
+            tmp.replace(cache_file)
+        except Exception:
+            pass
+
+    return out_df

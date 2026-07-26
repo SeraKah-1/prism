@@ -18,12 +18,14 @@ def simulate_entry(
     random_state: int = 42,
     p_up: float | None = None,
     side: str = "long",
+    cost_bps: float = 50.0,
 ) -> dict[str, Any]:
     """
     Simulate holding from `entry_price` for `horizon` trading days under GBM.
 
     Returns terminal distribution stats and P&L for long (default) or short.
     Also reports model P(up) if provided for comparison with MC P(terminal > entry).
+    Includes cost_bps transaction friction (default 50 bps / 0.5% round-trip).
     """
     entry = float(entry_price)
     h = max(1, int(horizon))
@@ -47,13 +49,16 @@ def simulate_entry(
     if len(terminal) == 0:
         return {"ok": False, "error": "Simulation produced no paths."}
 
+    cost_pct = max(0.0, float(cost_bps)) / 10000.0
     side = (side or "long").lower()
     if side == "short":
-        rets = entry / terminal - 1.0
-        profit_mask = terminal < entry
+        rets = (entry * (1.0 - cost_pct)) / terminal - 1.0
+        profit_mask = rets > 0
     else:
-        rets = terminal / entry - 1.0
-        profit_mask = terminal > entry
+        # Long net price after round-trip transaction friction
+        net_terminal = terminal * (1.0 - cost_pct)
+        rets = (net_terminal / entry) - 1.0
+        profit_mask = rets > 0
         side = "long"
 
     def q(a: float) -> float:

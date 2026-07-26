@@ -32,6 +32,8 @@ def build_feature_frame(
     domestic_close: pd.Series | None = None,
     us_close: pd.Series | None = None,
     macro_close: pd.Series | None = None,
+    universe_median_close: pd.Series | None = None,
+    sector_median_close: pd.Series | None = None,
     window: int = 60,
 ) -> pd.DataFrame:
     """
@@ -40,6 +42,8 @@ def build_feature_frame(
     All inputs are close-price series indexed by date. No future data is used:
     rolling stats at t use only observations ≤ t.
     """
+    from stock_prob.ingest import align_us_to_idx
+
     eq = equity_close.astype(float).sort_index()
     r = log_returns(eq)
 
@@ -63,14 +67,31 @@ def build_feature_frame(
         feats["beta_us"] = rolling_beta(r, ru, window)
         feats["corr_us"] = rolling_corr(r, ru, window)
         feats["ret_us_1d"] = ru
+        # Raw overnight US lag feature via single source of truth alignment
+        feats["us_ret_1d_lagged"] = align_us_to_idx(ru, eq.index)
 
     if macro_close is not None:
         m = macro_close.astype(float).reindex(eq.index).ffill()
         feats["macro_lvl"] = m
         feats["macro_chg"] = m.pct_change()
 
+    if universe_median_close is not None:
+        um = universe_median_close.astype(float).reindex(eq.index).ffill()
+        feats["ret_vs_universe"] = eq.pct_change(21) - um.pct_change(21)
+
+    if sector_median_close is not None:
+        sm = sector_median_close.astype(float).reindex(eq.index).ffill()
+        feats["ret_vs_sector"] = eq.pct_change(21) - sm.pct_change(21)
+
     feats["close"] = eq
     return feats
+
+
+def validate_brier_delta(brier_old: float, brier_new: float, threshold: float = -0.002) -> bool:
+    """Return True if new feature set improves Brier score beyond threshold."""
+    if not (np.isfinite(brier_old) and np.isfinite(brier_new)):
+        return False
+    return float(brier_new - brier_old) <= threshold
 
 
 def feature_columns(df: pd.DataFrame) -> list[str]:

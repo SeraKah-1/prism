@@ -135,3 +135,26 @@ def dm_test(
         "mean_diff": float(np.mean(d)),
         "n_obs": n_obs,
     }
+
+
+def brier_by_regime(
+    df: pd.DataFrame,
+    regime_col: str = "regime",
+    y_col: str = "y_true",
+    p_col: str = "prob_up_model",
+) -> pd.DataFrame:
+    """Group Brier Score evaluation across CALM, ELEVATED, and PANIC regimes."""
+    if df is None or len(df) == 0 or regime_col not in df.columns or y_col not in df.columns or p_col not in df.columns:
+        return pd.DataFrame(columns=["regime", "n_obs", "brier"])
+
+    rows = []
+    for reg_val, sub in df.groupby(regime_col):
+        b = brier_score(sub[y_col], sub[p_col])
+        rows.append(
+            {
+                "regime": str(reg_val),
+                "n_obs": len(sub),
+                "brier": float(b),
+            }
+        )
+    return pd.DataFrame(rows)

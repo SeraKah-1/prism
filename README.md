@@ -292,7 +292,7 @@ PYTHONPATH=src pytest tests/ -v
 
 ---
 
-## Status
+## Status & PRISM v9 Upgrades
 
 | Area | State |
 |------|--------|
@@ -301,7 +301,19 @@ PYTHONPATH=src pytest tests/ -v
 | Multi-ticker panel · IDX vs US | Done |
 | Twins · honesty · surface | Done |
 | Colab GUI · TUI · docs | Done |
+| Single Source of Truth US-to-IDX Alignment (`align_us_to_idx`) | **v9 Complete** |
+| Diebold-Mariano Test with Newey-West HAC (`dm_test`) | **v9 Complete** |
+| Self-Scoring Ledger Loop & Atomic Writes (`resolve_ledger`) | **v9 Complete** |
+| IDX Market Scanner & Relative Cone Ranking Engine (`scanner.py`) | **v9 Complete** |
+| Transaction Friction & Net Simulation (`cost_bps=50`) | **v9 Complete** |
+| Twin Cluster Drift Tracking (`twin_drift`) | **v9 Complete** |
 | GitHub [`prism`](https://github.com/SeraKah-1/prism) | Live |
+
+---
+
+## Known Limitations
+
+> **Known limitation:** Raw model probabilities are uncalibrated (Platt/Isotonic calibration adjustment is explicitly deferred to v10). Prediction decay curve analysis across intermediate forecast days is also planned for v10.
 
 ---
 

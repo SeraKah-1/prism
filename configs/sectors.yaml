@@ -1,0 +1,17 @@
+# Fallback mapping for major IDX and benchmark tickers when API metadata is unavailable
+BBCA.JK: Financials
+BMRI.JK: Financials
+BBNI.JK: Financials
+BBRI.JK: Financials
+TLKM.JK: Telecommunication
+ASII.JK: Industrials
+UNTR.JK: Energy
+ANTM.JK: Basic Materials
+INCO.JK: Basic Materials
+AMMN.JK: Basic Materials
+GOTO.JK: Technology
+AAPL: Technology
+MSFT: Technology
+^JKSE: Index
+^GSPC: Index
+^VIX: Macro
