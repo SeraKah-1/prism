@@ -144,11 +144,17 @@ def enrich_single(
             primary_h = h
             break
     if primary_h is not None and target in frames:
-        hist = frames[target][["date", "close"]].tail(400)
+        hist = frames[target][["date", "close"]].tail(500)
+        levels = base.get("levels") or {}
         fan = build_fan_figure(
             hist,
             garch_cones[primary_h],
             title=f"{target} — GARCH cone {primary_h}d [{regime}]",
+            supports=levels.get("supports"),
+            resistances=levels.get("resistances"),
+            horizon=int(primary_h),
+            nested_cones=garch_cones,
+            show_nested=len(garch_cones) > 1,
         )
         metrics_fig = build_metrics_figure(base["metrics"], title=f"{target} Brier tournament inputs")
         # Use bare horizon keys ("5") not "h5" — "h5" breaks primary_horizon/int parse
@@ -203,6 +209,21 @@ def enrich_single(
     base["ensemble_live"] = ens_probs
     base["honesty"] = hon
     base["surface"] = surf
+    # Prefer GARCH cones in live payload when available
+    if garch_cones:
+        base["live_cones"] = garch_cones
+    # update model meta for Advanced mode
+    mm = dict(base.get("model_meta") or {})
+    mm["cone_model"] = "garch11_or_sample_fallback"
+    if garch_meta:
+        sample_h = str(primary_h if primary_h is not None else next(iter(garch_meta), ""))
+        if sample_h in garch_meta:
+            mm["cone_method"] = garch_meta[sample_h].get("method", "garch")
+            mm["mu"] = garch_meta[sample_h].get("mu", mm.get("mu"))
+            mm["vol"] = garch_meta[sample_h].get("vol", mm.get("vol"))
+            base["mu"] = mm.get("mu", base.get("mu"))
+            base["vol"] = mm.get("vol", base.get("vol"))
+    base["model_meta"] = mm
     base["lab_report"] = str(art / "report_lab.html") if (art / "report_lab.html").exists() else base.get("report_html")
     return base
 

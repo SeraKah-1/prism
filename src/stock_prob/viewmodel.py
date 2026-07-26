@@ -34,6 +34,15 @@ class PrismViewModel:
     status: str = "ready"
     error: str = ""
     forecast_errors: dict[str, str] = field(default_factory=dict)
+    # new research layers
+    supports: list[dict[str, Any]] = field(default_factory=list)
+    resistances: list[dict[str, Any]] = field(default_factory=list)
+    character: dict[str, Any] = field(default_factory=dict)
+    decision: dict[str, Any] = field(default_factory=dict)
+    mu: float = 0.0
+    vol: float = 0.02
+    model_meta: dict[str, Any] = field(default_factory=dict)
+    horizons: list[int] = field(default_factory=list)
 
     def primary_horizon(self) -> int:
         from stock_prob.horizon_keys import parse_horizon_key
@@ -52,6 +61,8 @@ class PrismViewModel:
                 prob_hs.append(h)
         if prob_hs:
             return int(sorted(prob_hs)[0])
+        if self.horizons:
+            return int(sorted(self.horizons)[0])
         return 21
 
     def summary_cards(self) -> list[dict[str, Any]]:
@@ -94,12 +105,76 @@ class PrismViewModel:
             and bool(self.cones)
         )
 
+    def cone_for(self, horizon: int) -> pd.DataFrame | None:
+        h = int(horizon)
+        c = self.cones.get(h)
+        if c is None:
+            c = self.cones.get(str(h))  # type: ignore[arg-type]
+        return c
+
+    def to_session(self) -> dict[str, Any]:
+        """JSON-friendly payload for Gradio State (horizon switch + entry sim)."""
+        cones = {}
+        for k, df in self.cones.items():
+            try:
+                hi = int(k)
+            except Exception:
+                continue
+            if isinstance(df, pd.DataFrame) and len(df):
+                d = df.copy()
+                if "date" in d.columns:
+                    d["date"] = pd.to_datetime(d["date"]).astype(str)
+                cones[str(hi)] = d.to_dict(orient="records")
+        hist = pd.DataFrame()
+        if self.history is not None and len(self.history):
+            hist = self.history.copy()
+            if "date" in hist.columns:
+                hist["date"] = pd.to_datetime(hist["date"]).astype(str)
+        return {
+            "ticker": self.ticker,
+            "name": self.name,
+            "asof": self.asof,
+            "last_price": self.last_price,
+            "regime": self.regime,
+            "probs": {str(k): float(v) for k, v in self.probs.items()},
+            "history": hist.to_dict(orient="records") if len(hist) else [],
+            "cones": cones,
+            "supports": self.supports,
+            "resistances": self.resistances,
+            "character": self.character,
+            "decision": self.decision,
+            "mu": self.mu,
+            "vol": self.vol,
+            "model_meta": self.model_meta,
+            "horizons": list(self.horizons) or sorted(int(k) for k in cones.keys()),
+            "beat_baseline": {str(k): bool(v) for k, v in self.beat_baseline.items()},
+            "brier_skill": {str(k): float(v) for k, v in self.brier_skill.items() if v == v},
+            "run_id": self.run_id,
+            "art_dir": self.art_dir,
+        }
+
+
+def session_to_frames(session: dict[str, Any]) -> tuple[pd.DataFrame, dict[int, pd.DataFrame]]:
+    hist = pd.DataFrame(session.get("history") or [])
+    if len(hist) and "date" in hist.columns:
+        hist["date"] = pd.to_datetime(hist["date"])
+    cones: dict[int, pd.DataFrame] = {}
+    for k, rows in (session.get("cones") or {}).items():
+        try:
+            hi = int(k)
+        except Exception:
+            continue
+        df = pd.DataFrame(rows)
+        if len(df) and "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"])
+        cones[hi] = df
+    return hist, cones
+
 
 def _normalize_history(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or len(df) == 0:
         return pd.DataFrame(columns=["date", "close"])
     out = df.copy()
-    # multiindex / odd columns
     if isinstance(out.columns, pd.MultiIndex):
         out.columns = [c[0] if isinstance(c, tuple) else c for c in out.columns]
     cols = {str(c).lower(): c for c in out.columns}
@@ -118,14 +193,12 @@ def _normalize_history(df: pd.DataFrame) -> pd.DataFrame:
 def _history_from_result(result: dict[str, Any], ticker: str) -> pd.DataFrame:
     from pathlib import Path
 
-    # 1) in-memory history from pipeline
     if isinstance(result.get("history"), pd.DataFrame) and len(result["history"]):
         h = _normalize_history(result["history"])
         if len(h):
-            return h.tail(400)
+            return h.tail(500)
 
     art = Path(result.get("art_dir") or "")
-    # 2) parquet/csv written by pipeline
     for name in ("history.parquet", "history.csv"):
         p = art / name
         if p.exists():
@@ -133,10 +206,9 @@ def _history_from_result(result: dict[str, Any], ticker: str) -> pd.DataFrame:
                 h = pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_csv(p)
                 h = _normalize_history(h)
                 if len(h):
-                    return h.tail(400)
+                    return h.tail(500)
             except Exception:
                 pass
-    # 3) excel export
     export_xlsx = art / "export.xlsx"
     if export_xlsx.exists():
         try:
@@ -145,12 +217,11 @@ def _history_from_result(result: dict[str, Any], ticker: str) -> pd.DataFrame:
                 return h
         except Exception:
             pass
-    # 4) fetch
     try:
         from stock_prob.ingest import fetch_symbol
 
         raw = fetch_symbol(ticker, period="5y", use_cache=True)
-        return _normalize_history(raw[["date", "close"]]).tail(400)
+        return _normalize_history(raw[["date", "close"]]).tail(500)
     except Exception:
         pass
     preds = result.get("predictions")
@@ -166,7 +237,6 @@ def _cones_from_result(
 
     cones: dict[int, pd.DataFrame] = {}
 
-    # 1) in-memory cones from pipeline
     raw_cones = result.get("live_cones") or {}
     if isinstance(raw_cones, dict):
         for k, v in raw_cones.items():
@@ -188,13 +258,16 @@ def _cones_from_result(
             except Exception:
                 pass
 
-    # 2) always rebuild missing cones from history
     hist = _normalize_history(history)
     if len(hist) > 30:
         s = hist.set_index(pd.to_datetime(hist["date"]))["close"].astype(float)
         r = log_returns(s).dropna()
-        mu = float(r.tail(60).mean()) if len(r) else 0.0
-        vol = float(r.tail(60).std()) if len(r) else 0.02
+        mu = float(result.get("mu")) if result.get("mu") is not None else (
+            float(r.tail(60).mean()) if len(r) else 0.0
+        )
+        vol = float(result.get("vol")) if result.get("vol") is not None else (
+            float(r.tail(60).std()) if len(r) else 0.02
+        )
         if not np.isfinite(mu):
             mu = 0.0
         if not np.isfinite(vol) or vol <= 0:
@@ -219,20 +292,24 @@ def _cones_from_result(
 
 
 def build_viewmodel(result: dict[str, Any], *, name: str = "") -> PrismViewModel:
+    from stock_prob.decision import build_decision
     from stock_prob.horizon_keys import normalize_prob_map, parse_horizon_key
+    from stock_prob.structure import market_character, support_resistance
 
     ticker = str(result.get("ticker") or "?")
     probs = normalize_prob_map(result.get("live_probs") or {})
-    # also accept ensemble-only if primary empty
     if not probs and result.get("ensemble_live"):
         probs = normalize_prob_map(result.get("ensemble_live"))
 
-    horizons: list[int] = [int(k) for k in probs.keys()]
-    if not horizons:
-        for h in result.get("horizons") or []:
-            ph = parse_horizon_key(h)
-            if ph is not None:
-                horizons.append(ph)
+    horizons: list[int] = []
+    for h in result.get("horizons") or []:
+        ph = parse_horizon_key(h)
+        if ph is not None:
+            horizons.append(ph)
+    for k in probs.keys():
+        ph = parse_horizon_key(k)
+        if ph is not None and ph not in horizons:
+            horizons.append(ph)
     if not horizons:
         horizons = [5, 21, 252]
 
@@ -269,6 +346,43 @@ def build_viewmodel(result: dict[str, Any], *, name: str = "") -> PrismViewModel
     elif result.get("last_date") is not None:
         asof = str(pd.Timestamp(result["last_date"]).date())
 
+    # levels / character
+    levels = result.get("levels") or {}
+    supports = list(levels.get("supports") or [])
+    resistances = list(levels.get("resistances") or [])
+    character = dict(result.get("character") or {})
+    if (not supports and not resistances) and history is not None and len(history) > 40:
+        try:
+            s = history.set_index(pd.to_datetime(history["date"]))["close"]
+            levels = support_resistance(s)
+            supports = list(levels.get("supports") or [])
+            resistances = list(levels.get("resistances") or [])
+            if not character:
+                character = market_character(s)
+        except Exception:
+            pass
+
+    mu = float(result.get("mu") or 0.0)
+    vol = float(result.get("vol") or 0.02)
+    if (not np.isfinite(vol) or vol <= 0) and history is not None and len(history) > 30:
+        r = log_returns(history.set_index(pd.to_datetime(history["date"]))["close"]).dropna()
+        mu = float(r.tail(60).mean()) if len(r) else 0.0
+        vol = float(r.tail(60).std()) if len(r) else 0.02
+
+    primary_h = None
+    if horizons:
+        primary_h = int(sorted(horizons)[0])
+    decision = build_decision(
+        probs=probs,
+        beat_baseline=beat,
+        brier_skill=skill,
+        last_price=last_price,
+        supports=supports,
+        resistances=resistances,
+        character=character,
+        primary_horizon=primary_h,
+    )
+
     champ = None
     t = result.get("tournament") or {}
     if isinstance(t, dict):
@@ -288,12 +402,27 @@ def build_viewmodel(result: dict[str, Any], *, name: str = "") -> PrismViewModel
         status = "partial"
         error = "Cone only — probabilities missing"
 
+    model_meta = dict(result.get("model_meta") or {})
+    if not model_meta:
+        model_meta = {
+            "mu": mu,
+            "vol": vol,
+            "n_bars": int(len(history)) if history is not None else 0,
+            "cone_method": "gbm_monte_carlo",
+            "direction_model": "logistic_regression_sklearn",
+        }
+
+    regime = str(result.get("regime") or "n/a")
+    if character.get("label") and regime in ("n/a", "na", "", "UNKNOWN"):
+        # still show vol regime from classify if missing
+        pass
+
     return PrismViewModel(
         ticker=ticker,
         name=name or ticker,
         asof=asof,
         last_price=last_price,
-        regime=str(result.get("regime") or "n/a"),
+        regime=regime,
         probs=probs,
         ensemble_probs={
             str(k): float(v)
@@ -314,4 +443,12 @@ def build_viewmodel(result: dict[str, Any], *, name: str = "") -> PrismViewModel
         status=status,
         error=error,
         forecast_errors={str(k): str(v) for k, v in ferr.items()} if isinstance(ferr, dict) else {},
+        supports=supports,
+        resistances=resistances,
+        character=character,
+        decision=decision,
+        mu=mu,
+        vol=vol,
+        model_meta=model_meta,
+        horizons=sorted(set(int(h) for h in horizons)),
     )

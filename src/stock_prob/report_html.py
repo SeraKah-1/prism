@@ -60,6 +60,11 @@ def write_prism_report(vm: PrismViewModel, path: str | Path) -> Path:
                 vm.history,
                 cone,
                 title=f"{vm.ticker} · price range ({h}d) · regime {vm.regime}",
+                supports=getattr(vm, "supports", None) or [],
+                resistances=getattr(vm, "resistances", None) or [],
+                horizon=int(h),
+                nested_cones=vm.cones,
+                show_nested=len(vm.cones) > 1,
             )
     except Exception:
         fan = None
@@ -114,6 +119,20 @@ def write_prism_report(vm: PrismViewModel, path: str | Path) -> Path:
         )
 
     price_txt = f"{vm.last_price:,.2f}" if vm.last_price == vm.last_price else "—"
+
+    from stock_prob.decision import decision_html
+    from stock_prob.model_info import model_info_html
+
+    decision_block = ""
+    try:
+        decision_block = decision_html(getattr(vm, "decision", None) or {}, last_price=vm.last_price)
+    except Exception:
+        decision_block = ""
+    try:
+        info_block = model_info_html(getattr(vm, "model_meta", None) or {})
+    except Exception:
+        info_block = ""
+    char_label = (getattr(vm, "character", None) or {}).get("label") or "—"
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -248,6 +267,7 @@ def write_prism_report(vm: PrismViewModel, path: str | Path) -> Path:
         <span class="chip">as of <b>{vm.asof or "—"}</b></span>
         <span class="chip">last <b>{price_txt}</b></span>
         <span class="chip">regime <b>{vm.regime}</b></span>
+        <span class="chip">character <b>{char_label}</b></span>
         <span class="chip">run <b>{(vm.run_id or "—")[:16]}</b></span>
       </div>
     </header>
@@ -260,15 +280,19 @@ def write_prism_report(vm: PrismViewModel, path: str | Path) -> Path:
       </div>
     </div>
 
+    {decision_block}
+
     <section class="grid">
       {''.join(card_bits) or '<div class="card"><span class="label">No probabilities</span></div>'}
     </section>
 
     <section class="card panel reveal" style="--d:160ms">
       <h2>Price range (fan chart)</h2>
-      <p class="hint">Median path with 50% and 80% bands. Wider band = more uncertainty.</p>
+      <p class="hint">As-of line = now. Median + bands. S/R = support &amp; resistance. End labels = p10/p50/p90.</p>
       {_fig_div(fan)}
     </section>
+
+    {info_block}
 
     <section class="card panel reveal" style="--d:220ms">
       <h2>Direction</h2>

@@ -1,7 +1,7 @@
 """Charts via matplotlib → inline SVG.
 
-Why not Plotly in Gradio: gr.HTML often blocks or fails to run Plotly's
-<script> + CDN. SVG needs no JS, no CDN, no JSON inject — it just shows.
+Why not Plotly in Gradio: gr.HTML often blocks Plotly's <script> + CDN.
+SVG needs no JS, no CDN — it just shows.
 """
 from __future__ import annotations
 
@@ -75,7 +75,6 @@ def fig_to_html(fig: Any, *, height: int | None = None) -> str:
         )
         svg = buf.getvalue()
         plt.close(fig)
-        # Strip XML declaration for cleaner embed
         if svg.lstrip().startswith("<?xml"):
             svg = svg.split("?>", 1)[-1]
         return f'<div class="chart-svg" style="width:100%;overflow:auto">{svg}</div>'
@@ -87,78 +86,220 @@ def fig_to_html(fig: Any, *, height: int | None = None) -> str:
         return f'<p class="hint" style="padding:12px">Chart render failed: {e}</p>'
 
 
+def _zoom_history(history: pd.DataFrame, horizon: int | None, date_col: str = "date") -> pd.DataFrame:
+    """Keep enough history to read the cone: ~3× horizon (min 60 bars), or full if short."""
+    h = history.copy()
+    if horizon is None or horizon <= 0 or len(h) <= 80:
+        return h
+    keep = int(max(60, min(len(h), horizon * 3 + 20)))
+    return h.tail(keep).reset_index(drop=True)
+
+
 def build_fan_figure(
     history: pd.DataFrame,
-    cone: pd.DataFrame,
+    cone: pd.DataFrame | None = None,
     *,
     title: str = "Price range",
     price_col: str = "close",
     date_col: str = "date",
-    animate: bool = False,  # kept for API compat; unused
+    supports: list[dict[str, Any]] | None = None,
+    resistances: list[dict[str, Any]] | None = None,
+    horizon: int | None = None,
+    nested_cones: dict[int, pd.DataFrame] | None = None,
+    show_nested: bool = False,
+    animate: bool = False,  # API compat
 ) -> Any:
+    """
+    Fan chart with:
+      - clear as-of line + last price label
+      - p10/p50/p90 end labels
+      - optional support/resistance
+      - zoom scaled to selected horizon
+      - optional nested cones for other horizons (lighter)
+    """
     if plt is None:
         raise ImportError("matplotlib required for charts")
 
     h = history.copy()
     h[date_col] = pd.to_datetime(h[date_col])
-    c = cone.copy()
-    c[date_col] = pd.to_datetime(c[date_col])
+    h = h.sort_values(date_col).reset_index(drop=True)
 
-    fig, ax = plt.subplots(figsize=(9.2, 4.2), dpi=120)
+    # horizon from cone length if not given
+    if horizon is None and cone is not None and len(cone):
+        horizon = len(cone)
+    h_zoom = _zoom_history(h, horizon, date_col=date_col)
+
+    fig, ax = plt.subplots(figsize=(9.4, 4.6), dpi=120)
     _style_ax(ax)
 
-    ax.plot(
-        h[date_col],
-        h[price_col].astype(float),
-        color=CHART_LINE,
-        lw=1.8,
-        label="Close",
-        zorder=3,
-    )
+    closes = h_zoom[price_col].astype(float)
+    dates = h_zoom[date_col]
+    ax.plot(dates, closes, color=CHART_LINE, lw=1.8, label="Close", zorder=3)
 
-    if {"p10", "p90"}.issubset(c.columns):
-        ax.fill_between(
-            c[date_col],
-            c["p10"].astype(float),
-            c["p90"].astype(float),
-            color=ACCENT,
-            alpha=0.12,
-            label="80% band",
-            linewidth=0,
-            zorder=1,
-        )
-    if {"p25", "p75"}.issubset(c.columns):
-        ax.fill_between(
-            c[date_col],
-            c["p25"].astype(float),
-            c["p75"].astype(float),
-            color=ACCENT,
-            alpha=0.22,
-            label="50% band",
-            linewidth=0,
-            zorder=2,
-        )
-    if "p50" in c.columns:
-        ax.plot(
-            c[date_col],
-            c["p50"].astype(float),
-            color=CHART_MEDIAN,
-            lw=1.8,
-            ls="--",
-            label="Median",
-            zorder=4,
-        )
+    last_date = pd.Timestamp(dates.iloc[-1]) if len(dates) else None
+    last_price = float(closes.iloc[-1]) if len(closes) else float("nan")
 
-    if len(h):
+    # nested background cones (other horizons)
+    if show_nested and nested_cones:
+        for hh, cdf in sorted(nested_cones.items(), key=lambda x: -int(x[0])):
+            if horizon is not None and int(hh) == int(horizon):
+                continue
+            if cdf is None or len(cdf) == 0:
+                continue
+            cc = cdf.copy()
+            cc[date_col] = pd.to_datetime(cc[date_col])
+            if {"p10", "p90"}.issubset(cc.columns):
+                ax.fill_between(
+                    cc[date_col],
+                    cc["p10"].astype(float),
+                    cc["p90"].astype(float),
+                    color=ACCENT,
+                    alpha=0.04,
+                    linewidth=0,
+                    zorder=1,
+                )
+
+    # primary cone
+    if cone is not None and len(cone):
+        c = cone.copy()
+        c[date_col] = pd.to_datetime(c[date_col])
+
+        # split band color above/below last for direction readability
+        if {"p10", "p90"}.issubset(c.columns) and np.isfinite(last_price):
+            p10 = c["p10"].astype(float).values
+            p90 = c["p90"].astype(float).values
+            x = c[date_col]
+            # full 80% band (neutral)
+            ax.fill_between(
+                x, p10, p90, color=ACCENT, alpha=0.10, label="80% band", linewidth=0, zorder=1
+            )
+            # emphasize upside portion above last
+            ax.fill_between(
+                x,
+                np.maximum(p10, last_price),
+                p90,
+                where=p90 > last_price,
+                color=UP,
+                alpha=0.10,
+                linewidth=0,
+                zorder=2,
+                label="Above last",
+            )
+            ax.fill_between(
+                x,
+                p10,
+                np.minimum(p90, last_price),
+                where=p10 < last_price,
+                color=DOWN,
+                alpha=0.08,
+                linewidth=0,
+                zorder=2,
+                label="Below last",
+            )
+        if {"p25", "p75"}.issubset(c.columns):
+            ax.fill_between(
+                c[date_col],
+                c["p25"].astype(float),
+                c["p75"].astype(float),
+                color=ACCENT,
+                alpha=0.18,
+                label="50% band",
+                linewidth=0,
+                zorder=2,
+            )
+        if "p50" in c.columns:
+            med = c["p50"].astype(float)
+            ax.plot(
+                c[date_col],
+                med,
+                color=CHART_MEDIAN,
+                lw=2.0,
+                ls="--",
+                label="Median",
+                zorder=4,
+            )
+
+        # end-of-horizon price markers
+        end_x = c[date_col].iloc[-1]
+        for col, color, name in (
+            ("p10", DOWN, "p10"),
+            ("p50", CHART_MEDIAN, "p50"),
+            ("p90", UP, "p90"),
+        ):
+            if col not in c.columns:
+                continue
+            y = float(c[col].iloc[-1])
+            ax.scatter([end_x], [y], s=28, color=color, zorder=6, edgecolors=BG_ELEV, linewidths=0.8)
+            ax.annotate(
+                f"{name} {y:,.2f}",
+                xy=(end_x, y),
+                xytext=(8, 0),
+                textcoords="offset points",
+                fontsize=8,
+                color=color,
+                va="center",
+                fontweight="600",
+            )
+
+    # as-of line + last price
+    if last_date is not None and np.isfinite(last_price):
+        ax.axvline(last_date, color=ACCENT, ls="-", lw=1.2, alpha=0.85, zorder=5)
         ax.scatter(
-            [h[date_col].iloc[-1]],
-            [float(h[price_col].iloc[-1])],
-            s=36,
+            [last_date],
+            [last_price],
+            s=48,
             color=ACCENT,
-            zorder=5,
+            zorder=7,
             edgecolors=BG_ELEV,
-            linewidths=1.2,
+            linewidths=1.4,
             label="Now",
+        )
+        ax.annotate(
+            f"Last {last_price:,.2f}",
+            xy=(last_date, last_price),
+            xytext=(-8, 12),
+            textcoords="offset points",
+            fontsize=9,
+            color=FG,
+            fontweight="700",
+            ha="right",
+            bbox=dict(boxstyle="round,pad=0.25", fc=BG_ELEV, ec=BORDER, alpha=0.95),
+        )
+        # subtle last-price horizontal guide
+        ax.axhline(last_price, color=BORDER, ls=":", lw=1.0, zorder=1)
+
+    # support / resistance
+    for lv in supports or []:
+        try:
+            y = float(lv["price"])
+        except Exception:
+            continue
+        ax.axhline(y, color=UP, ls="--", lw=1.0, alpha=0.55, zorder=1)
+        ax.text(
+            0.01,
+            y,
+            f"  S {y:,.2f}",
+            transform=ax.get_yaxis_transform(),
+            fontsize=8,
+            color=UP,
+            va="bottom",
+            fontweight="600",
+        )
+    for lv in resistances or []:
+        try:
+            y = float(lv["price"])
+        except Exception:
+            continue
+        ax.axhline(y, color=DOWN, ls="--", lw=1.0, alpha=0.55, zorder=1)
+        ax.text(
+            0.01,
+            y,
+            f"  R {y:,.2f}",
+            transform=ax.get_yaxis_transform(),
+            fontsize=8,
+            color=DOWN,
+            va="top",
+            fontweight="600",
         )
 
     ax.set_title(title, fontsize=12, fontweight="600", loc="left", pad=10)
@@ -166,13 +307,17 @@ def build_fan_figure(
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
     ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=7))
     fig.autofmt_xdate(rotation=0, ha="center")
-    leg = ax.legend(
-        loc="upper left",
-        frameon=False,
-        fontsize=8,
-        ncols=3,
-        labelcolor=FG_MUTED,
-    )
+    # de-dupe legend labels
+    handles, labels = ax.get_legend_handles_labels()
+    seen = set()
+    H, L = [], []
+    for hh, ll in zip(handles, labels):
+        if ll in seen:
+            continue
+        seen.add(ll)
+        H.append(hh)
+        L.append(ll)
+    leg = ax.legend(H, L, loc="upper left", frameon=False, fontsize=7.5, ncols=3, labelcolor=FG_MUTED)
     for t in leg.get_texts():
         t.set_color(FG_MUTED)
     fig.tight_layout()
@@ -203,7 +348,14 @@ def build_metrics_figure(metrics: pd.DataFrame, title: str = "Brier vs baselines
     width = 0.8 / max(len(present), 1)
     for i, (col, name, color) in enumerate(present):
         vals = metrics[col].astype(float).values
-        ax.bar(x + i * width - (len(present) - 1) * width / 2, vals, width * 0.9, label=name, color=color, zorder=2)
+        ax.bar(
+            x + i * width - (len(present) - 1) * width / 2,
+            vals,
+            width * 0.9,
+            label=name,
+            color=color,
+            zorder=2,
+        )
 
     ax.set_xticks(x)
     ax.set_xticklabels(x_labels)
@@ -215,7 +367,6 @@ def build_metrics_figure(metrics: pd.DataFrame, title: str = "Brier vs baselines
 
 
 def build_prob_gauge_figure(probs: dict[str, float], title: str = "P(up) by horizon") -> Any:
-    """Horizontal bars for P(up) per time horizon."""
     if plt is None:
         raise ImportError("matplotlib required for charts")
 

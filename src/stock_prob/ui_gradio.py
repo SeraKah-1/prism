@@ -1,5 +1,11 @@
 """
 Prism Gradio UI — plain English, matplotlib SVG charts (no Plotly/JS).
+
+Features:
+  - multi-horizon fan chart with S/R + as-of labels
+  - horizon radio to switch forecast window without re-running
+  - data conclusion (buy/wait/avoid) + entry Monte Carlo sim
+  - model math card (real logistic + GBM, not a stub)
 """
 from __future__ import annotations
 
@@ -12,8 +18,12 @@ from typing import Any
 
 import pandas as pd
 
+from stock_prob.decision import decision_html
 from stock_prob.design import UX_BUILD
+from stock_prob.horizon_keys import parse_horizon_key
+from stock_prob.model_info import model_info_html
 from stock_prob.report_html import write_prism_report
+from stock_prob.simulate import simulate_entry, simulate_html
 from stock_prob.tickers import (
     parse_symbol_from_label,
     resolve_ticker,
@@ -21,7 +31,7 @@ from stock_prob.tickers import (
     search_tickers,
 )
 from stock_prob.ui_colab import run_once
-from stock_prob.viewmodel import build_viewmodel
+from stock_prob.viewmodel import build_viewmodel, session_to_frames
 from stock_prob.viz import (
     build_fan_figure,
     build_metrics_figure,
@@ -84,7 +94,7 @@ PRISM_CSS = """
 }
 
 .gradio-container {
-  max-width: 960px !important;
+  max-width: 980px !important;
   margin: 0 auto !important;
   font-family: "DM Sans", system-ui, sans-serif !important;
   background:
@@ -338,6 +348,7 @@ def on_market_change(preset: str):
 
 def _summary_html(vm, name: str) -> str:
     cards = vm.summary_cards()
+    char = (vm.character or {}).get("label") or "n/a"
     if not cards:
         lead = "No probabilities for the selected time horizons."
     else:
@@ -351,7 +362,10 @@ def _summary_html(vm, name: str) -> str:
             f"<b>{c0['prob_up']*100:.0f}%</b> ({conf}). "
             f"Model beats base rate on <b>{beat} of {len(cards)}</b> time horizons."
         )
-    pills = [f'<span class="pill ok">regime: {vm.regime}</span>']
+    pills = [
+        f'<span class="pill ok">regime: {vm.regime}</span>',
+        f'<span class="pill">character: {char}</span>',
+    ]
     for c in cards:
         cls = "up" if c["direction"] == "up" else "down"
         beat = c.get("beat_baseline")
@@ -423,6 +437,68 @@ def _is_advanced(mode: str) -> bool:
     return s.startswith("advanced") or s.startswith("lanjutan")
 
 
+def _horizon_label(h: int) -> str:
+    mapping = {
+        5: "5d · ~1 week",
+        21: "21d · ~1 month",
+        63: "63d · ~1 quarter",
+        126: "126d · ~6 months",
+        252: "252d · ~1 year",
+    }
+    return mapping.get(int(h), f"{int(h)}d ahead")
+
+
+def _render_fan_from_session(session: dict[str, Any] | None, horizon_label: str | None) -> str:
+    if not session or not session.get("history"):
+        return _frame(
+            "Price range",
+            "Run analysis first.",
+            "<p class='hint'>No run data yet.</p>",
+        )
+    hist, cones = session_to_frames(session)
+    # parse selected horizon
+    h = None
+    if horizon_label:
+        # labels like "21d · ~1 month" or raw "21"
+        digits = "".join(ch for ch in str(horizon_label) if ch.isdigit())
+        if digits:
+            h = int(digits[:4]) if len(digits) > 3 else int(digits)
+        else:
+            h = parse_horizon_key(horizon_label)
+    if h is None:
+        hs = session.get("horizons") or sorted(cones.keys())
+        h = int(hs[0]) if hs else 21
+    cone = cones.get(int(h))
+    if cone is None and cones:
+        # nearest available
+        keys = sorted(cones.keys())
+        h = min(keys, key=lambda k: abs(k - int(h)))
+        cone = cones[h]
+
+    try:
+        fig = build_fan_figure(
+            hist,
+            cone,
+            title=f"Price range · {session.get('ticker', '')} · {h}d ahead",
+            supports=session.get("supports") or [],
+            resistances=session.get("resistances") or [],
+            horizon=int(h),
+            nested_cones=cones,
+            show_nested=len(cones) > 1,
+        )
+        body = fig_to_html(fig, height=500)
+    except Exception as e:
+        body = f"<p class='hint'>Chart failed: {e}</p>"
+
+    return _frame(
+        f"Price range · {h}d ahead",
+        "Solid vertical line = now. Dashed median = typical path. Green/red wash = above/below last. "
+        "S/R = support & resistance. End labels = p10 / p50 / p90.",
+        body,
+        40,
+    )
+
+
 def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=None):
     """Generator: yield progress so Colab never looks blank mid-run."""
     try:
@@ -436,38 +512,82 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
 
             progress = _P()
     except Exception:
-        pass
+        gr = None  # type: ignore
 
     idle = _frame("Waiting", "Results show up here.", "<p class='hint'>No data yet.</p>")
     empty_table = pd.DataFrame()
+    empty_session: dict = {}
+    idle_hz = gr.Radio(choices=["—"], value="—", interactive=False) if gr else None
 
-    def pack(summary, fan, gauge, met, table, report, status_html):
-        return summary, fan, gauge, met, table, report, status_html
+    def pack(
+        summary,
+        decision,
+        fan,
+        gauge,
+        met,
+        model_card,
+        table,
+        report,
+        status_html,
+        session,
+        hz_update,
+        entry_val,
+        sim_hz_update,
+        sim_html,
+    ):
+        return (
+            summary,
+            decision,
+            fan,
+            gauge,
+            met,
+            model_card,
+            table,
+            report,
+            status_html,
+            session,
+            hz_update,
+            entry_val,
+            sim_hz_update,
+            sim_html,
+        )
 
     try:
         yield pack(
             _loading_panel(4, 1, 5, "Starting…", "Setting up the pipeline."),
+            "",
             _placeholder_frame("Price range", "Waiting for prices…"),
             _placeholder_frame("P(up)", "Waiting for model…"),
             _placeholder_frame("Model vs baselines", "Waiting for evaluation…"),
+            model_info_html(),
             empty_table,
             None,
             _status("0–5% · Starting…", "running"),
+            empty_session,
+            gr.Radio(choices=["—"], value="—", interactive=False) if gr else "—",
+            0.0,
+            gr.Dropdown(choices=["—"], value="—", interactive=False) if gr else "—",
+            "",
         )
         if progress is not None:
             progress(0.05, desc="Starting…")
 
         yield pack(
             _loading_panel(12, 1, 5, "Validating ticker…", f"Looking up: <b>{ticker_label or '—'}</b>"),
+            "",
             _placeholder_frame("Price range", "Validating…"),
             _placeholder_frame("P(up)", "Validating…"),
             _placeholder_frame("Model vs baselines", "Validating…"),
+            model_info_html(),
             empty_table,
             None,
             _status("12% · Validating ticker…", "running"),
+            empty_session,
+            gr.Radio(choices=["—"], value="—", interactive=False) if gr else "—",
+            0.0,
+            gr.Dropdown(choices=["—"], value="—", interactive=False) if gr else "—",
+            "",
         )
-        if progress is not None:
-            progress(0.12, desc="Validating…")
 
         resolved = resolve_ticker(ticker_label or "")
         if not resolved.get("ok"):
@@ -475,7 +595,22 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
                 "Ticker not found",
                 "Try a company name (e.g. Apple) or a ticker (AAPL, BBCA.JK).",
             )
-            yield pack(err, idle, idle, idle, empty_table, None, _status("Failed: ticker not found.", "err"))
+            yield pack(
+                err,
+                "",
+                idle,
+                idle,
+                idle,
+                model_info_html(),
+                empty_table,
+                None,
+                _status("Failed: ticker not found.", "err"),
+                empty_session,
+                gr.Radio(choices=["—"], value="—", interactive=False) if gr else "—",
+                0.0,
+                gr.Dropdown(choices=["—"], value="—", interactive=False) if gr else "—",
+                "",
+            )
             return
 
         symbol = resolved["symbol"]
@@ -503,14 +638,21 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
                 5,
                 f"Fetching & modeling · {symbol}",
                 f"{name} · {mode_txt} · horizons {hz}. "
-                f"Standard is faster. Advanced adds more stats (slower). GPU does not help this stack.",
+                f"Fits logistic P(up), walk-forward Brier, Monte Carlo cones.",
             ),
+            "",
             _placeholder_frame("Price range", f"Loading prices for {symbol}…"),
             _placeholder_frame("P(up)", "Building features…"),
             _placeholder_frame("Model vs baselines", "Walk-forward pending…"),
+            model_info_html(),
             empty_table,
             None,
             _status(f"35% · Computing · {symbol}…", "running"),
+            empty_session,
+            gr.Radio(choices=["—"], value="—", interactive=False) if gr else "—",
+            0.0,
+            gr.Dropdown(choices=["—"], value="—", interactive=False) if gr else "—",
+            "",
         )
         if progress is not None:
             progress(0.35, desc=f"Computing {symbol}…")
@@ -530,12 +672,19 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
 
         yield pack(
             _loading_panel(78, 4, 5, "Building charts…", f"Model done for {symbol}. Rendering SVG charts."),
+            "",
             _placeholder_frame("Price range", "Drawing fan chart…"),
             _placeholder_frame("P(up)", "Drawing bars…"),
             _placeholder_frame("Model vs baselines", "Drawing Brier bars…"),
+            model_info_html(result.get("model_meta")),
             empty_table,
             None,
             _status("78% · Rendering charts…", "running"),
+            empty_session,
+            gr.Radio(choices=["—"], value="—", interactive=False) if gr else "—",
+            0.0,
+            gr.Dropdown(choices=["—"], value="—", interactive=False) if gr else "—",
+            "",
         )
         if progress is not None:
             progress(0.78, desc="Rendering…")
@@ -544,9 +693,9 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
 
         if not vm.has_probs():
             try:
-                from stock_prob.ingest import fetch_universe, align_close_panel
                 from stock_prob.features import build_feature_frame
                 from stock_prob.forecast import compute_live_forecast, history_frame
+                from stock_prob.ingest import align_close_panel, fetch_universe
 
                 ctx_syms = [symbol, domestic, us_index, macro]
                 frames = fetch_universe([s for s in ctx_syms if s], period="5y", use_cache=True)
@@ -562,28 +711,30 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
                     live = compute_live_forecast(feats, eq, hz, mc_paths=500)
                     result["live_probs"] = live["live_probs"]
                     result["live_cones"] = live["live_cones"]
-                    result["history"] = history_frame(eq, 400)
+                    result["history"] = history_frame(eq, 500)
                     result["last_price"] = live["last_price"]
                     result["last_date"] = live["last_date"]
+                    result["mu"] = live.get("mu")
+                    result["vol"] = live.get("vol")
                     result["forecast_errors"] = live.get("errors") or {}
+                    result["model_meta"] = {
+                        **(result.get("model_meta") or {}),
+                        "mu": live.get("mu"),
+                        "vol": live.get("vol"),
+                        "feature_cols": live.get("feature_cols"),
+                        "n_bars": live.get("n_bars"),
+                    }
                     vm = build_viewmodel(result, name=name)
             except Exception as e:
                 vm.forecast_errors["_recovery"] = str(e)[:200]
 
-        h = vm.primary_horizon()
-        cone = vm.cones.get(h)
-        if cone is None:
-            cone = vm.cones.get(str(h))
-        fan_fig = None
-        if vm.history is not None and len(vm.history) > 5 and cone is not None:
-            try:
-                fan_fig = build_fan_figure(
-                    vm.history,
-                    cone,
-                    title=f"Price range · {vm.ticker} · {h}d ahead",
-                )
-            except Exception as e:
-                vm.forecast_errors["fan"] = str(e)[:160]
+        session = vm.to_session()
+        hz_labels = [_horizon_label(h) for h in (vm.horizons or hz)]
+        if not hz_labels:
+            hz_labels = [_horizon_label(vm.primary_horizon())]
+        primary_lab = hz_labels[0]
+        fan_block = _render_fan_from_session(session, primary_lab)
+
         gauge_fig = None
         if vm.has_probs():
             try:
@@ -608,14 +759,6 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
         write_prism_report(vm, raw_report)
         safe_report = _gradio_safe_file(raw_report)
 
-        fan_block = _frame(
-            "Price range (fan chart)",
-            "Dashed line = median. Shaded bands = likely range. Wider = more uncertainty.",
-            fig_to_html(fan_fig, height=480)
-            if fan_fig is not None
-            else "<p class='hint'>Could not build price range (not enough history).</p>",
-            40,
-        )
         gauge_block = _frame(
             "P(up) by horizon",
             "50% is a coin flip. Distance from 50% is conviction, not a guarantee.",
@@ -648,6 +791,57 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
             ]
         )
 
+        # levels table rows
+        for lv in (vm.supports or [])[:3]:
+            table = pd.concat(
+                [
+                    table,
+                    pd.DataFrame(
+                        [
+                            {
+                                "Horizon": "Support",
+                                "P(up) %": None,
+                                "Direction": f"{lv['price']:,.2f}",
+                                "Beats baseline?": f"{lv.get('distance_pct', 0):+.1f}%",
+                            }
+                        ]
+                    ),
+                ],
+                ignore_index=True,
+            )
+        for lv in (vm.resistances or [])[:3]:
+            table = pd.concat(
+                [
+                    table,
+                    pd.DataFrame(
+                        [
+                            {
+                                "Horizon": "Resistance",
+                                "P(up) %": None,
+                                "Direction": f"{lv['price']:,.2f}",
+                                "Beats baseline?": f"{lv.get('distance_pct', 0):+.1f}%",
+                            }
+                        ]
+                    ),
+                ],
+                ignore_index=True,
+            )
+
+        decision_block = decision_html(vm.decision, last_price=vm.last_price)
+        model_card = model_info_html(vm.model_meta)
+        entry_default = float(vm.last_price) if vm.last_price == vm.last_price else 0.0
+
+        hz_radio = (
+            gr.Radio(choices=hz_labels, value=primary_lab, interactive=True, label="Forecast horizon")
+            if gr
+            else primary_lab
+        )
+        sim_dd = (
+            gr.Dropdown(choices=hz_labels, value=primary_lab, interactive=True, label="Sim horizon")
+            if gr
+            else primary_lab
+        )
+
         if not vm.has_probs() and not vm.has_charts():
             err_detail = "; ".join(f"{k}: {v}" for k, v in list(vm.forecast_errors.items())[:6])
             summary = _summary_html_error(
@@ -657,34 +851,19 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
             )
             yield pack(
                 summary,
+                decision_block,
                 fan_block,
                 gauge_block,
                 met_block,
+                model_card,
                 table,
                 safe_report,
                 _status("Done with errors — no numbers/charts.", "err"),
-            )
-            return
-
-        if not vm.has_probs():
-            summary = _summary_html(vm, name)
-            summary = summary.replace("Result", "Partial result (chart only)")
-            ferr = ""
-            if vm.forecast_errors:
-                ferr = "<p class='hint'>Notes: " + "; ".join(
-                    f"{k}={v}" for k, v in list(vm.forecast_errors.items())[:4]
-                ) + "</p>"
-            summary = summary + ferr + (
-                "<p class='lead'>Probabilities failed; price range still shown from historical volatility.</p>"
-            )
-            yield pack(
-                summary,
-                fan_block,
-                gauge_block,
-                met_block,
-                table,
-                safe_report,
-                _status("Partial — chart ok, probabilities empty.", "err"),
+                session,
+                hz_radio,
+                entry_default,
+                sim_dd,
+                "",
             )
             return
 
@@ -692,20 +871,21 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
             progress(1.0, desc="Done")
 
         summary = _summary_html(vm, name)
-        if str(vm.regime) in ("n/a", "na", ""):
-            summary += (
-                "<p class='hint' style='margin-top:8px'>Note: Standard mode skips market regime "
-                "(shows n/a). Use Advanced for the regime label.</p>"
-            )
-
         yield pack(
             summary,
+            decision_block,
             fan_block,
             gauge_block,
             met_block,
+            model_card,
             table,
             safe_report,
-            _status("100% · Done. Scroll for charts; download the HTML report if needed.", "ok"),
+            _status("100% · Done. Use horizon buttons to switch the fan chart; run entry sim below.", "ok"),
+            session,
+            hz_radio,
+            entry_default,
+            sim_dd,
+            "",
         )
     except Exception:
         err = traceback.format_exc()
@@ -716,13 +896,56 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
         idle = _frame("Error", "This panel is empty because the run failed.", "<p class='hint'>See the message above.</p>")
         yield pack(
             msg,
+            "",
             idle,
             idle,
             idle,
+            model_info_html(),
             pd.DataFrame(),
             None,
             _status("Error — details in the result panel.", "err"),
+            {},
+            gr.Radio(choices=["—"], value="—", interactive=False) if gr else "—",
+            0.0,
+            gr.Dropdown(choices=["—"], value="—", interactive=False) if gr else "—",
+            "",
         )
+
+
+def on_horizon_change(session: dict, horizon_label: str):
+    return _render_fan_from_session(session or {}, horizon_label)
+
+
+def on_simulate(session: dict, entry_price: float, horizon_label: str, side: str):
+    if not session:
+        return simulate_html({"ok": False, "error": "Run analysis first."})
+    h = 21
+    if horizon_label:
+        digits = "".join(ch for ch in str(horizon_label) if ch.isdigit())
+        if digits:
+            h = int(digits[:4]) if len(digits) > 3 else int(digits)
+    p_up = None
+    for k, v in (session.get("probs") or {}).items():
+        if parse_horizon_key(k) == h:
+            p_up = float(v)
+            break
+    try:
+        entry = float(entry_price)
+    except Exception:
+        entry = float(session.get("last_price") or 0)
+    if not entry or entry != entry or entry <= 0:
+        entry = float(session.get("last_price") or 0)
+    sim = simulate_entry(
+        entry,
+        mu_daily=float(session.get("mu") or 0.0),
+        vol_daily=float(session.get("vol") or 0.02),
+        horizon=h,
+        n_paths=2500,
+        random_state=42 + h,
+        p_up=p_up,
+        side=side or "long",
+    )
+    return simulate_html(sim, ticker=str(session.get("ticker") or ""))
 
 
 def build_app():
@@ -731,13 +954,15 @@ def build_app():
     seed = _choices("bank") or _choices("stock") or []
 
     with gr.Blocks(title="Prism") as demo:
+        session_state = gr.State({})
+
         gr.HTML(
             """
             <div class="hero">
               <div class="kicker">Prism</div>
               <h1>Stock direction probabilities</h1>
-              <p>Search a company, pick time horizons, see price range bands and P(up) —
-              checked against simple baselines. Research tool, not a forecast guarantee.</p>
+              <p>Search a company, pick time horizons, see price ranges and P(up) —
+              checked against simple baselines. Research tool, not investment advice.</p>
             </div>
             """
         )
@@ -781,7 +1006,7 @@ def build_app():
             gr.HTML(
                 """
                 <div class="section-title" style="margin-top:14px">3 · Time horizons</div>
-                <p class="hint">Trading days. You can select more than one.</p>
+                <p class="hint">Trading days to forecast. Selected horizons appear as chart buttons after the run.</p>
                 """
             )
             horizons = gr.CheckboxGroup(
@@ -793,7 +1018,7 @@ def build_app():
             gr.HTML(
                 """
                 <div class="section-title" style="margin-top:14px">4 · Mode</div>
-                <p class="hint">Standard is enough for price range and P(up). Advanced adds more stats (slower).</p>
+                <p class="hint">Standard fits logistic + cones + walk-forward. Advanced adds GARCH vol and extra lab stats (slower).</p>
                 """
             )
             mode = gr.Radio(
@@ -810,15 +1035,55 @@ def build_app():
 
         gr.HTML('<div class="section-title" style="margin:8px 4px">Results</div>')
         summary = gr.HTML()
+        decision = gr.HTML()
+
+        with gr.Group(elem_classes=["card"]):
+            gr.HTML(
+                """
+                <div class="section-title">Chart horizon</div>
+                <p class="hint">Switch the forecast window. Only horizons you selected at run time are listed.</p>
+                """
+            )
+            chart_horizon = gr.Radio(
+                choices=["—"],
+                value="—",
+                label="Forecast horizon ahead",
+                interactive=False,
+            )
+
         fan = gr.HTML()
         gauge = gr.HTML()
         met = gr.HTML()
+        model_card = gr.HTML(model_info_html())
+
+        with gr.Group(elem_classes=["card"]):
+            gr.HTML(
+                """
+                <div class="section-title">Entry simulation</div>
+                <p class="hint">Enter a price. Monte Carlo simulates paths for the selected horizon and estimates profit/loss odds.</p>
+                """
+            )
+            with gr.Row():
+                entry_price = gr.Number(label="Entry price", value=0, precision=4)
+                sim_horizon = gr.Dropdown(
+                    choices=["—"],
+                    value="—",
+                    label="Sim horizon",
+                    interactive=False,
+                )
+                sim_side = gr.Radio(
+                    choices=["long", "short"],
+                    value="long",
+                    label="Side",
+                )
+            sim_btn = gr.Button("Simulate entry", variant="secondary")
+            sim_out = gr.HTML("")
 
         with gr.Group(elem_classes=["card"]):
             gr.HTML(
                 """
                 <div class="section-title">Summary table</div>
-                <p class="hint">Same numbers as the charts, in a table.</p>
+                <p class="hint">P(up) by horizon, plus support/resistance levels when found.</p>
                 """
             )
             table = gr.Dataframe(label="Summary", wrap=True, interactive=False)
@@ -841,10 +1106,36 @@ def build_app():
         search.change(on_type_search, inputs=[search], outputs=[ticker])
         ticker.change(on_pick_ticker, inputs=[ticker, market], outputs=[market, status])
         market.change(on_market_change, inputs=[market], outputs=[market_hint])
+
         run_btn.click(
             run_analysis,
             inputs=[ticker, market, horizons, mode],
-            outputs=[summary, fan, gauge, met, table, report_file, run_status],
+            outputs=[
+                summary,
+                decision,
+                fan,
+                gauge,
+                met,
+                model_card,
+                table,
+                report_file,
+                run_status,
+                session_state,
+                chart_horizon,
+                entry_price,
+                sim_horizon,
+                sim_out,
+            ],
+        )
+        chart_horizon.change(
+            on_horizon_change,
+            inputs=[session_state, chart_horizon],
+            outputs=[fan],
+        )
+        sim_btn.click(
+            on_simulate,
+            inputs=[session_state, entry_price, sim_horizon, sim_side],
+            outputs=[sim_out],
         )
 
     return demo

@@ -110,6 +110,29 @@ def run_pipeline(
     last_date = live["last_date"]
     last_price = float(live["last_price"])
     forecast_errors = live.get("errors") or {}
+    mu_daily = float(live.get("mu") or 0.0)
+    vol_daily = float(live.get("vol") or 0.02)
+
+    # Always attach regime + structure (cheap; needed for Standard mode UI)
+    from stock_prob.regime import classify_regime, latest_regime
+    from stock_prob.structure import market_character, support_resistance
+
+    reg_df = classify_regime(eq_close, us_close=ctx["us"])
+    regime = latest_regime(reg_df)
+    character = market_character(eq_close, us_close=ctx["us"])
+    levels = support_resistance(eq_close)
+    model_meta = {
+        "direction_model": "logistic_regression_sklearn",
+        "cone_model": "gbm_monte_carlo",
+        "cone_method": "sample_vol_60d",
+        "mu": mu_daily,
+        "vol": vol_daily,
+        "n_bars": int(len(eq_close)),
+        "feature_cols": list(live.get("feature_cols") or []),
+        "mc_paths": int(cfg.mc_paths),
+        "horizons": list(cfg.horizons),
+        "label": "y=1 if forward return over H days > 0",
+    }
 
     # Walk-forward OOS (fast GUI skips in-loop MC diagnostics)
     wf = walk_forward_equity(
@@ -177,7 +200,12 @@ def run_pipeline(
             fan = build_fan_figure(
                 hist,
                 live_cones[primary_h],
-                title=f"{target} — {primary_h}d cone",
+                title=f"{target} — {primary_h}d price range",
+                supports=levels.get("supports"),
+                resistances=levels.get("resistances"),
+                horizon=int(primary_h),
+                nested_cones=live_cones,
+                show_nested=len(live_cones) > 1,
             )
         except Exception:
             fan = None
@@ -222,6 +250,17 @@ def run_pipeline(
         [{"horizon": int(k), "prob_up": v} for k, v in live_probs.items()]
     ).to_csv(art_dir / "live_probs.csv", index=False)
 
+    # Persist structure for UI rebuild
+    try:
+        import json
+
+        (art_dir / "structure.json").write_text(
+            json.dumps({"levels": levels, "character": character, "regime": regime}, indent=2, default=str)
+        )
+        (art_dir / "model_meta.json").write_text(json.dumps(model_meta, indent=2, default=str))
+    except Exception:
+        pass
+
     return {
         "run_id": run_id,
         "ticker": target,
@@ -238,6 +277,13 @@ def run_pipeline(
         "predictions": wf.predictions,
         "features_tail": feats.tail(5),
         "symbols": symbols,
+        "regime": regime,
+        "character": character,
+        "levels": levels,
+        "mu": mu_daily,
+        "vol": vol_daily,
+        "model_meta": model_meta,
+        "horizons": list(cfg.horizons),
         "ok": bool(live_probs) or bool(live_cones),
     }
 
