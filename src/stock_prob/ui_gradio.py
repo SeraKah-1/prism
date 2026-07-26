@@ -212,6 +212,102 @@ button.primary {
   from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* —— Live progress (always visible during run) —— */
+.progress-panel {
+  background: #fffcf7;
+  border: 1px solid #e7e0d5;
+  border-radius: 16px;
+  padding: 18px 18px 16px;
+  margin: 0 0 16px;
+  box-shadow: 0 12px 32px -28px rgba(28,25,23,0.4);
+  animation: rise 0.35s var(--ease) both;
+}
+.progress-panel .title {
+  margin: 0 0 6px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #1c1917;
+}
+.progress-panel .detail {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #78716c;
+  line-height: 1.45;
+}
+.progress-track {
+  height: 10px;
+  border-radius: 999px;
+  background: #efeae2;
+  overflow: hidden;
+  border: 1px solid #e7e0d5;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0f3d3e, #2d6a4f);
+  width: 0%;
+  transition: width 0.35s var(--ease);
+  position: relative;
+}
+.progress-fill.indeterminate {
+  width: 40% !important;
+  animation: slide 1.1s ease-in-out infinite;
+}
+@keyframes slide {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #78716c;
+  font-variant-numeric: tabular-nums;
+}
+.progress-steps {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.progress-steps li {
+  font-size: 12.5px;
+  color: #a8a29e;
+  padding: 4px 0 4px 18px;
+  position: relative;
+}
+.progress-steps li::before {
+  content: "";
+  width: 8px; height: 8px; border-radius: 99px;
+  background: #d6d3d1;
+  position: absolute; left: 0; top: 9px;
+}
+.progress-steps li.done { color: #1b7a4e; }
+.progress-steps li.done::before { background: #1b7a4e; }
+.progress-steps li.active { color: #0f3d3e; font-weight: 600; }
+.progress-steps li.active::before {
+  background: #0f3d3e;
+  box-shadow: 0 0 0 4px rgba(15,61,62,0.15);
+  animation: pulse 1.2s ease infinite;
+}
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(15,61,62,0.12); }
+  50% { box-shadow: 0 0 0 6px rgba(15,61,62,0.08); }
+}
+.status-bar {
+  border: 1px solid #e7e0d5;
+  background: #fffcf7;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #44403c;
+  margin: 8px 0 0;
+}
+.status-bar.running { border-color: #a7c4be; background: #eef6f3; color: #0f3d3e; }
+.status-bar.ok { border-color: #b7e0c7; background: #e6f5ec; color: #1b7a4e; }
+.status-bar.err { border-color: #f2c1bc; background: #fdecea; color: #b42318; }
 """
 
 
@@ -320,11 +416,94 @@ def _summary_html(vm, name: str) -> str:
 """
 
 
+def _loading_panel(pct: int, step: int, total: int, title: str, detail: str, steps: list[str] | None = None) -> str:
+    """Big, always-visible progress UI (not a tiny Gradio spinner)."""
+    pct = max(0, min(100, int(pct)))
+    steps = steps or [
+        "Validasi saham",
+        "Ambil data harga",
+        "Hitung model & walk-forward",
+        "Susun grafik cone",
+        "Siapkan laporan",
+    ]
+    items = []
+    for i, label in enumerate(steps, start=1):
+        cls = "done" if i < step else ("active" if i == step else "")
+        items.append(f'<li class="{cls}">{i}. {label}</li>')
+    return f"""
+<div class="progress-panel">
+  <p class="title">{title}</p>
+  <p class="detail">{detail}</p>
+  <div class="progress-track"><div class="progress-fill" style="width:{pct}%"></div></div>
+  <div class="progress-meta"><span>Langkah {step}/{total}</span><span>{pct}%</span></div>
+  <ul class="progress-steps">{''.join(items)}</ul>
+</div>
+"""
+
+
+def _status(msg: str, kind: str = "running") -> str:
+    return f'<div class="status-bar {kind}">{msg}</div>'
+
+
+def _placeholder_frame(title: str, msg: str) -> str:
+    body = (
+        f'<div style="padding:28px 12px;text-align:center;color:#78716c;font-size:13px">'
+        f'<div class="progress-track" style="max-width:220px;margin:0 auto 10px">'
+        f'<div class="progress-fill indeterminate"></div></div>{msg}</div>'
+    )
+    return _frame(title, "Sedang diproses…", body)
+
+
 def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=None):
-    empty = _frame("Menunggu", "Jalankan analisis untuk mengisi panel ini.", "<p class='hint'>Belum ada data.</p>")
+    """
+    Generator: yields intermediate UI so Colab never looks like a white screen.
+    Gradio shows each yield immediately (progress panel + skeleton frames).
+    """
+    # Gradio injects Progress when the param is named progress; keep optional for tests
     try:
-        if progress:
-            progress(0.08, desc="Memvalidasi saham…")
+        import gradio as gr
+
+        if progress is None:
+            # no-op stub
+            class _P:
+                def __call__(self, *a, **k):
+                    return None
+
+            progress = _P()
+    except Exception:
+        pass
+    idle = _frame("Menunggu", "Hasil akan muncul di bingkai ini.", "<p class='hint'>Belum ada data.</p>")
+    empty_table = pd.DataFrame()
+
+    def pack(summary, fan, gauge, met, table, report, status_html):
+        return summary, fan, gauge, met, table, report, status_html
+
+    try:
+        # —— 0% immediate feedback ——
+        yield pack(
+            _loading_panel(4, 1, 5, "Memulai analisis…", "Menyiapkan pipeline. Jangan tutup tab ini."),
+            _placeholder_frame("Kisaran harga (cone)", "Menunggu data harga…"),
+            _placeholder_frame("Peluang naik", "Menunggu model…"),
+            _placeholder_frame("Kejujuran model", "Menunggu evaluasi…"),
+            empty_table,
+            None,
+            _status("0–5% · Memulai…", "running"),
+        )
+        if progress is not None:
+            progress(0.05, desc="Memulai…")
+
+        # —— validate ticker ——
+        yield pack(
+            _loading_panel(12, 1, 5, "Validasi saham…", f"Mencari: <b>{ticker_label or '—'}</b>"),
+            _placeholder_frame("Kisaran harga (cone)", "Validasi ticker…"),
+            _placeholder_frame("Peluang naik", "Validasi ticker…"),
+            _placeholder_frame("Kejujuran model", "Validasi ticker…"),
+            empty_table,
+            None,
+            _status("12% · Validasi saham (fetch live)…", "running"),
+        )
+        if progress is not None:
+            progress(0.12, desc="Validasi saham…")
 
         resolved = resolve_ticker(ticker_label or "")
         if not resolved.get("ok"):
@@ -332,7 +511,8 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
                 "Saham tidak ditemukan",
                 "Coba nama perusahaan (contoh: bank central asia) atau kode (BBCA, AAPL).",
             )
-            return err, empty, empty, empty, pd.DataFrame(), None, "Gagal: saham tidak ditemukan."
+            yield pack(err, idle, idle, idle, empty_table, None, _status("Gagal: saham tidak ditemukan.", "err"))
+            return
 
         symbol = resolved["symbol"]
         name = resolved.get("name") or symbol
@@ -350,9 +530,27 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
             hz = [5, 21, 252]
 
         use_lab = str(mode).lower().startswith("lanjutan")
+        mode_txt = "Lanjutan (lebih lama)" if use_lab else "Standar"
 
-        if progress:
-            progress(0.28, desc=f"Menghitung model {symbol}…")
+        # —— fetch + model (slow) ——
+        yield pack(
+            _loading_panel(
+                35,
+                2,
+                5,
+                f"Mengambil data & menghitung · {symbol}",
+                f"{name} · mode {mode_txt} · horizon {hz}. "
+                f"Langkah ini biasanya 15–45 detik (cache membuat run berikutnya lebih cepat).",
+            ),
+            _placeholder_frame("Kisaran harga (cone)", f"Mengunduh / cache harga {symbol}…"),
+            _placeholder_frame("Peluang naik", "Menyiapkan fitur multi-faktor…"),
+            _placeholder_frame("Kejujuran model", "Walk-forward belum jalan…"),
+            empty_table,
+            None,
+            _status(f"35% · Hitung model {symbol} (bisa 15–45 dtk)…", "running"),
+        )
+        if progress is not None:
+            progress(0.35, desc=f"Hitung model {symbol}…")
 
         result = run_once(
             symbol,
@@ -364,17 +562,40 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
             mc_paths=900,
         )
 
-        if progress:
-            progress(0.72, desc="Merender grafik…")
+        # —— build viewmodel / charts ——
+        yield pack(
+            _loading_panel(
+                78,
+                4,
+                5,
+                "Menyusun grafik…",
+                f"Model {symbol} selesai. Membuat cone, bar peluang, dan skor kejujuran.",
+            ),
+            _placeholder_frame("Kisaran harga (cone)", "Merender Plotly cone…"),
+            _placeholder_frame("Peluang naik", "Merender bar…"),
+            _placeholder_frame("Kejujuran model", "Merender Brier…"),
+            empty_table,
+            None,
+            _status("78% · Merender grafik…", "running"),
+        )
+        if progress is not None:
+            progress(0.78, desc="Merender grafik…")
 
         vm = build_viewmodel(result, name=name)
+        if not vm.probs and (result.get("live_probs") is None):
+            # hard empty result
+            err = _summary_html_error(
+                "Hasil kosong",
+                "Pipeline selesai tapi tidak ada probabilitas. Coba horizon lebih pendek atau mode Standar.",
+            )
+            yield pack(err, idle, idle, idle, empty_table, None, _status("Selesai tanpa angka — coba lagi.", "err"))
+            return
 
-        # Write report under art_dir then copy to /tmp for Gradio File
         if vm.art_dir:
             raw_report = Path(vm.art_dir) / "prism_report.html"
         else:
+            GRADIO_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
             raw_report = GRADIO_EXPORT_DIR / f"prism_{uuid.uuid4().hex[:8]}.html"
-            raw_report.parent.mkdir(parents=True, exist_ok=True)
         write_prism_report(vm, raw_report)
         safe_report = _gradio_safe_file(raw_report)
 
@@ -429,17 +650,17 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
             ]
         )
 
-        if progress:
+        if progress is not None:
             progress(1.0, desc="Selesai")
 
-        return (
+        yield pack(
             summary,
             fan_block,
             gauge_block,
             met_block,
             table,
             safe_report,
-            "Selesai. Scroll ke bawah untuk cone; unduh laporan HTML jika perlu.",
+            _status("100% · Selesai. Scroll untuk cone; unduh laporan HTML bila perlu.", "ok"),
         )
     except Exception:
         err = traceback.format_exc()
@@ -447,7 +668,16 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
             f'<div class="summary"><h2>Gagal menghitung</h2>'
             f'<pre style="white-space:pre-wrap;font-size:11px;color:#78716c">{err[-1800:]}</pre></div>'
         )
-        return msg, empty, empty, empty, pd.DataFrame(), None, "Terjadi error."
+        idle = _frame("Error", "Panel ini kosong karena proses gagal.", "<p class='hint'>Lihat pesan di atas.</p>")
+        yield pack(
+            msg,
+            idle,
+            idle,
+            idle,
+            pd.DataFrame(),
+            None,
+            _status("Error — detail di panel hasil.", "err"),
+        )
 
 
 def _summary_html_error(title: str, body: str) -> str:
