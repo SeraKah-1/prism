@@ -1,0 +1,61 @@
+// SPE Triangulation — multi-factor market mirror (TradingView Pine v5)
+// Mirrors the lab idea: stock vs domestic index vs US index (request.security).
+// This is a visual proxy, NOT the Python logistic model.
+//
+// How to use:
+// 1) TradingView → Pine Editor → New blank indicator → paste → Save → Add to chart
+// 2) On inputs: set Domestic Index (e.g. IDXCOMPOSITE or JKSE) and US Index (SPX)
+// 3) Works on any symbol you open on the chart
+
+//@version=5
+indicator("SPE Triangulation", shorttitle="SPE-Tri", overlay=false, timeframe="", timeframe.gaps=false)
+
+// ——— Inputs (change freely — no hardcoded equity) ———
+domSym   = input.symbol("IDXCOMPOSITE", "Domestic index")
+usSym    = input.symbol("SPX", "US index")
+win      = input.int(60, "Rolling window", minval=10, maxval=250)
+showBeta = input.bool(true, "Show betas")
+showCorr = input.bool(true, "Show correlations")
+showR2   = input.bool(true, "Show R² proxy (corr² to domestic)")
+
+// ——— Series ———
+stockRet = ta.change(math.log(close))
+domClose = request.security(domSym, timeframe.period, close)
+usClose  = request.security(usSym, timeframe.period, close)
+domRet   = ta.change(math.log(domClose))
+usRet    = ta.change(math.log(usClose))
+
+// Rolling correlation & beta (cov/var)
+corrDom = ta.correlation(stockRet, domRet, win)
+corrUs  = ta.correlation(stockRet, usRet, win)
+varDom  = ta.variance(domRet, win)
+varUs   = ta.variance(usRet, win)
+covDom  = ta.correlation(stockRet, domRet, win) * ta.stdev(stockRet, win) * ta.stdev(domRet, win)
+covUs   = ta.correlation(stockRet, usRet, win)  * ta.stdev(stockRet, win) * ta.stdev(usRet, win)
+betaDom = varDom != 0 ? covDom / varDom : na
+betaUs  = varUs  != 0 ? covUs  / varUs  : na
+r2Dom   = corrDom * corrDom
+
+// ——— Plots ———
+hline(0, "Zero", color=color.new(color.gray, 50))
+plot(showCorr ? corrDom : na, "Corr domestic", color=color.teal, linewidth=2)
+plot(showCorr ? corrUs  : na, "Corr US",       color=color.orange, linewidth=2)
+plot(showBeta ? betaDom : na, "Beta domestic", color=color.aqua, linewidth=1, display=display.pane)
+plot(showBeta ? betaUs  : na, "Beta US",       color=color.fuchsia, linewidth=1, display=display.pane)
+plot(showR2 ? r2Dom : na, "R² vs domestic", color=color.yellow, linewidth=1, style=plot.style_area, histbase=0)
+
+// Background when highly coupled to market (high R²)
+bgcolor(r2Dom > 0.6 ? color.new(color.teal, 92) : na, title="High market R²")
+
+// Table snapshot
+var table t = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 70))
+if barstate.islast
+    table.cell(t, 0, 0, "SPE Triangulation", text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 1, "β dom", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(betaDom, "#.####"), text_color=color.aqua, text_size=size.tiny)
+    table.cell(t, 0, 2, "β US", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 2, str.tostring(betaUs, "#.####"), text_color=color.fuchsia, text_size=size.tiny)
+    table.cell(t, 0, 3, "ρ dom / ρ US", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 3, str.tostring(corrDom, "#.##") + " / " + str.tostring(corrUs, "#.##"), text_color=color.white, text_size=size.tiny)
+    table.cell(t, 0, 4, "R² dom", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 4, str.tostring(r2Dom, "#.##"), text_color=color.yellow, text_size=size.tiny)

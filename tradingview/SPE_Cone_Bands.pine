@@ -1,0 +1,35 @@
+// SPE Volatility Cone Bands (overlay) — Pine v5
+// Fan-style uncertainty band using rolling vol (GARCH-like visual, not full GARCH).
+// Median path = drift from recent mean return; bands = ± z * vol * sqrt(h).
+
+//@version=5
+indicator("SPE Cone Bands", shorttitle="SPE-Cone", overlay=true, max_lines_count=500, max_labels_count=50)
+
+volWin  = input.int(60, "Vol window", minval=10)
+driftWin= input.int(60, "Drift window", minval=10)
+horizon = input.int(21, "Horizon (bars forward)", minval=1, maxval=100)
+z80     = input.float(1.2816, "z for ~80% band", step=0.01)
+showFill= input.bool(true, "Fill cone")
+
+ret   = ta.change(math.log(close))
+mu    = ta.sma(ret, driftWin)
+sig   = ta.stdev(ret, volWin)
+
+// Only draw on last bar for cleanliness
+if barstate.islast and not na(mu) and not na(sig)
+    float last = close
+    // polyline via lines
+    for i = 1 to horizon
+        // expected log price
+        float med = last * math.exp(mu * i)
+        float half = last * math.exp(mu * i) * (math.exp(z80 * sig * math.sqrt(i)) - 1.0)
+        // approximate upper/lower in price space
+        float up = last * math.exp(mu * i + z80 * sig * math.sqrt(i))
+        float dn = last * math.exp(mu * i - z80 * sig * math.sqrt(i))
+        // connect segments
+        line.new(bar_index + i - 1, i == 1 ? last : last * math.exp(mu * (i - 1)), bar_index + i, med, color=color.orange, width=2)
+        line.new(bar_index + i - 1, i == 1 ? last : last * math.exp(mu * (i - 1) + z80 * sig * math.sqrt(i - 1)), bar_index + i, up, color=color.new(color.teal, 30), width=1)
+        line.new(bar_index + i - 1, i == 1 ? last : last * math.exp(mu * (i - 1) - z80 * sig * math.sqrt(i - 1)), bar_index + i, dn, color=color.new(color.teal, 30), width=1)
+
+// Also plot trailing realized vol on pane via plotchar optional
+plotchar(sig, title="daily vol", char="", location=location.top, color=color.new(color.teal, 100))

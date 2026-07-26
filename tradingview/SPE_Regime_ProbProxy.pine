@@ -1,0 +1,58 @@
+// SPE Regime + Probability Proxy (TradingView Pine v5)
+// Visual proxy for lab concepts: vol regime + momentum tilt as a 0–100 "P(up) score".
+// NOT calibrated Brier-honest logistic output from the Python lab.
+//
+// Use on any chart symbol. Optional US index for spillover-style context.
+
+//@version=5
+indicator("SPE Regime & Prob Proxy", shorttitle="SPE-Prob", overlay=false)
+
+usSym     = input.symbol("SPX", "US index (overnight context)")
+volWin    = input.int(21, "Vol window", minval=5)
+momWin    = input.int(21, "Momentum window", minval=2)
+corrWin   = input.int(60, "Corr window", minval=20)
+panicQ    = input.float(0.80, "Panic vol percentile (approx via SMA rank)", minval=0.5, maxval=0.95)
+
+ret       = ta.change(math.log(close))
+vol       = ta.stdev(ret, volWin)
+// Approximate high-vol regime: vol above long SMA of vol
+volLong   = ta.sma(vol, 100)
+regimePanic = not na(vol) and not na(volLong) and vol > volLong * 1.15
+regimeElev  = not na(vol) and not na(volLong) and vol > volLong * 0.95 and not regimePanic
+
+mom       = (close - close[momWin]) / close[momWin]
+usClose   = request.security(usSym, timeframe.period, close)
+usRet     = ta.change(math.log(usClose))
+corrUs    = ta.correlation(ret, usRet, corrWin)
+
+// Simple score 0–100: base 50 + momentum tilt + mild mean-reversion dampener in panic
+// Clip-ish using math.min/max
+raw = 50.0 + 100.0 * mom * 2.0
+// In panic, pull toward 50 (less conviction) and slightly follow US overnight proxy
+usTilt = nz(usRet[1], 0) * 200.0
+adj = regimePanic ? (raw * 0.5 + 50.0 * 0.5 + usTilt * 0.25) : (raw + usTilt * 0.1)
+score = math.max(0.0, math.min(100.0, adj))
+
+plot(score, "P(up) proxy 0-100", color=color.new(color.teal, 0), linewidth=2)
+hline(50, "Neutral", color=color.gray)
+hline(60, "Lean up", color=color.new(color.green, 60))
+hline(40, "Lean down", color=color.new(color.red, 60))
+
+bgcolor(regimePanic ? color.new(color.red, 90) : regimeElev ? color.new(color.orange, 92) : color.new(color.green, 95))
+
+plot(corrUs, "Corr vs US", color=color.orange, display=display.pane)
+
+var table t = table.new(position.bottom_right, 2, 4, bgcolor=color.new(color.black, 70))
+if barstate.islast
+    regTxt = regimePanic ? "PANIC" : regimeElev ? "ELEVATED" : "CALM"
+    table.cell(t, 0, 0, "SPE Prob Proxy", text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 1, "Score", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 1, str.tostring(score, "#.0"), text_color=color.teal, text_size=size.tiny)
+    table.cell(t, 0, 2, "Regime", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 2, regTxt, text_color=color.white, text_size=size.tiny)
+    table.cell(t, 0, 3, "ρ US", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 3, str.tostring(corrUs, "#.##"), text_color=color.orange, text_size=size.tiny)
+
+// Optional alerts
+alertcondition(ta.crossover(score, 60), title="Proxy lean UP", message="SPE proxy crossed above 60")
+alertcondition(ta.crossunder(score, 40), title="Proxy lean DOWN", message="SPE proxy crossed below 40")
