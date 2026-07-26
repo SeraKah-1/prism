@@ -75,6 +75,8 @@ def build_feature_frame(
         feats["macro_lvl"] = m
         feats["macro_chg"] = m.pct_change()
 
+    feats["ret_demeaned"] = r - r.rolling(window).mean()
+
     if universe_median_close is not None:
         um = universe_median_close.astype(float).reindex(eq.index).ffill()
         feats["ret_vs_universe"] = eq.pct_change(21) - um.pct_change(21)
