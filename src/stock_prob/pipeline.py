@@ -9,11 +9,10 @@ import pandas as pd
 
 from stock_prob.backtest import walk_forward_equity
 from stock_prob.config import RunConfig, UniverseConfig, save_run_config
-from stock_prob.features import build_feature_frame, feature_columns, log_returns
+from stock_prob.features import build_feature_frame
+from stock_prob.forecast import compute_live_forecast, history_frame
 from stock_prob.ingest import align_close_panel, fetch_universe
-from stock_prob.labels import make_supervised
 from stock_prob.ledger import append_ledger, new_run_id, write_run_artifacts
-from stock_prob.models import cone_table, fit_logistic
 from stock_prob.paths import ensure_layout, get_project_root
 from stock_prob.viz import build_fan_figure, build_metrics_figure, export_metrics_excel, write_html_report
 
@@ -79,42 +78,24 @@ def run_pipeline(
         window=cfg.rolling_window,
     )
 
-    # Live forecast at last available date with sufficient history
-    fcols = feature_columns(feats)
-    live_probs: dict[str, float] = {}
-    live_cones: dict[int, pd.DataFrame] = {}
-    last_date = eq_close.index.max()
-    last_price = float(eq_close.iloc[-1])
-    r = log_returns(eq_close).dropna()
-    mu = float(r.tail(60).mean()) if len(r) else 0.0
-    vol = float(r.tail(60).std()) if len(r) else 0.02
-    vol = vol if vol > 0 else 0.02
-
-    for h in cfg.horizons:
-        # Live fit uses DENSE labels (no embargo). Embargo is only for WF OOS scoring.
-        # Embargo-thinned 252d samples are too few (~4) to train; dense n is ~O(T-h).
-        X, y, _ = make_supervised(
-            feats, eq_close, h, feature_cols=fcols, use_embargo=False
+    # Live forecast — robust helper (cone even if logistic fails)
+    if len(eq_close) < 40:
+        raise ValueError(
+            f"History too short for {target}: {len(eq_close)} bars (need ~40+)."
         )
-        if len(X) < 30 or y.nunique() < 2:
-            live_probs[str(h)] = float("nan")
-            continue
-        model = fit_logistic(X, y, fcols, horizon=h, random_state=cfg.random_state)
-        latest = feats[fcols].dropna().iloc[[-1]]
-        p = float(model.predict_proba_up(latest)[0])
-        if not (p == p):  # NaN guard
-            live_probs[str(h)] = float("nan")
-            continue
-        live_probs[str(h)] = p
-        live_cones[h] = cone_table(
-            last_date,
-            last_price,
-            mu,
-            vol,
-            h,
-            n_paths=cfg.mc_paths,
-            random_state=cfg.random_state,
-        )
+    live = compute_live_forecast(
+        feats,
+        eq_close,
+        list(cfg.horizons),
+        mc_paths=cfg.mc_paths,
+        random_state=cfg.random_state,
+        min_train=30,
+    )
+    live_probs: dict[str, float] = dict(live["live_probs"])
+    live_cones: dict[int, pd.DataFrame] = dict(live["live_cones"])
+    last_date = live["last_date"]
+    last_price = float(live["last_price"])
+    forecast_errors = live.get("errors") or {}
 
     # Walk-forward OOS (fast GUI skips in-loop MC diagnostics)
     wf = walk_forward_equity(
@@ -135,42 +116,69 @@ def run_pipeline(
     config_dict["target_equity"] = target
     config_dict["symbols_fetched"] = list(symbols)
 
+    hist = history_frame(eq_close, n=400)
+    # Always persist history (even if logistic probs empty) so UI can rebuild charts
     art_dir = write_run_artifacts(
         run_id,
         config=config_dict,
         predictions=wf.predictions,
         metrics=wf.metrics,
-        extra={"live_probs": live_probs, "last_price": last_price, "last_date": str(last_date)},
+        extra={
+            "live_probs": live_probs,
+            "last_price": last_price,
+            "last_date": str(last_date),
+            "forecast_errors": forecast_errors,
+            "n_bars": int(len(eq_close)),
+        },
         root=root,
     )
     save_run_config(cfg, art_dir / "run_config.yaml")
+    hist.to_parquet(art_dir / "history.parquet", index=False)
+    hist.to_csv(art_dir / "history.csv", index=False)
 
-    # primary cone for viz: shortest horizon with data, else first
     primary_h = None
     for h in cfg.horizons:
-        if h in live_cones:
-            primary_h = h
+        if int(h) in live_cones:
+            primary_h = int(h)
             break
-    hist = frames[target][["date", "close"]].copy()
-    # limit history display
-    hist = hist.tail(400)
+    if primary_h is None and live_cones:
+        primary_h = sorted(live_cones.keys())[0]
 
     fan = None
     metrics_fig = None
     report_path = None
     excel_path = None
+    # Always write excel + report when we have history (not only when probs exist)
+    sheets = {
+        "metrics": wf.metrics if wf.metrics is not None else pd.DataFrame(),
+        "predictions": wf.predictions.head(5000) if len(wf.predictions) else pd.DataFrame(),
+        "history_tail": hist,
+        "live_probs": pd.DataFrame(
+            [{"horizon": int(k), "prob_up": v} for k, v in live_probs.items()]
+        ),
+    }
     if primary_h is not None:
-        fan = build_fan_figure(
-            hist,
-            live_cones[primary_h],
-            title=f"{target} — {primary_h}d cone",
-        )
-        metrics_fig = build_metrics_figure(wf.metrics, title=f"{target} Brier vs baselines")
+        sheets["live_cone"] = live_cones[primary_h]
+        try:
+            fan = build_fan_figure(
+                hist,
+                live_cones[primary_h],
+                title=f"{target} — {primary_h}d cone",
+            )
+        except Exception:
+            fan = None
+    if wf.metrics is not None and len(wf.metrics):
+        try:
+            metrics_fig = build_metrics_figure(wf.metrics, title=f"{target} Brier vs baselines")
+        except Exception:
+            metrics_fig = None
+    excel_path = export_metrics_excel(art_dir / "export.xlsx", sheets)
+    try:
         report_path = write_html_report(
             art_dir / "report.html",
             fan_fig=fan,
             metrics_fig=metrics_fig,
-            metrics_df=wf.metrics,
+            metrics_df=wf.metrics if wf.metrics is not None else pd.DataFrame(),
             probs=live_probs,
             meta={
                 "run_id": run_id,
@@ -179,24 +187,14 @@ def run_pipeline(
                 "domestic_index": cfg.universe.domestic_index,
                 "us_index": cfg.universe.us_index,
                 "macro": cfg.universe.macro,
-                "last_date": str(last_date.date()) if hasattr(last_date, "date") else str(last_date),
+                "last_date": str(pd.Timestamp(last_date).date()),
                 "last_price": f"{last_price:.4f}",
             },
         )
-        # gallery copy
         gallery = paths["gallery"] / f"{run_id}_{_safe(target)}.html"
         gallery.write_text(report_path.read_text())
-        report_path = report_path  # keep run-local as primary
-
-        excel_path = export_metrics_excel(
-            art_dir / "export.xlsx",
-            {
-                "metrics": wf.metrics,
-                "predictions": wf.predictions.head(5000) if len(wf.predictions) else pd.DataFrame(),
-                "live_cone": live_cones[primary_h],
-                "history_tail": hist,
-            },
-        )
+    except Exception:
+        report_path = None
 
     if write_ledger and len(wf.predictions):
         led = wf.predictions.copy()
@@ -217,10 +215,16 @@ def run_pipeline(
         "report_html": str(report_path) if report_path else None,
         "excel": str(excel_path) if excel_path else None,
         "live_probs": live_probs,
+        "live_cones": live_cones,
+        "history": hist,
+        "last_price": last_price,
+        "last_date": last_date,
+        "forecast_errors": forecast_errors,
         "metrics": wf.metrics,
         "predictions": wf.predictions,
         "features_tail": feats.tail(5),
         "symbols": symbols,
+        "ok": bool(live_probs) or bool(live_cones),
     }
 
 

@@ -565,6 +565,9 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
             mc_paths=500 if not use_lab else 900,
             speed="full" if use_lab else "fast",
         )
+        # Ensure horizons known for cone rebuild
+        result = dict(result)
+        result["horizons"] = list(hz)
 
         # —— build viewmodel / charts ——
         yield pack(
@@ -586,14 +589,64 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
             progress(0.78, desc="Merender grafik…")
 
         vm = build_viewmodel(result, name=name)
-        if not vm.probs and (result.get("live_probs") is None):
-            # hard empty result
-            err = _summary_html_error(
-                "Hasil kosong",
-                "Pipeline selesai tapi tidak ada probabilitas. Coba horizon lebih pendek atau mode Standar.",
-            )
-            yield pack(err, idle, idle, idle, empty_table, None, _status("Selesai tanpa angka — coba lagi.", "err"))
-            return
+
+        # Recovery: if probs empty but we have ticker, re-fetch + recompute live forecast
+        if not vm.has_probs():
+            try:
+                from stock_prob.ingest import fetch_universe, align_close_panel
+                from stock_prob.features import build_feature_frame
+                from stock_prob.forecast import compute_live_forecast, history_frame
+
+                ctx_syms = [symbol, domestic, us_index, macro]
+                frames = fetch_universe([s for s in ctx_syms if s], period="5y", use_cache=True)
+                panel = align_close_panel(frames)
+                if symbol in panel.columns:
+                    eq = panel[symbol].dropna()
+                    feats = build_feature_frame(
+                        eq,
+                        domestic_close=panel[domestic] if domestic in panel.columns else None,
+                        us_close=panel[us_index] if us_index in panel.columns else None,
+                        macro_close=panel[macro] if macro in panel.columns else None,
+                    )
+                    live = compute_live_forecast(feats, eq, hz, mc_paths=500)
+                    result["live_probs"] = live["live_probs"]
+                    result["live_cones"] = live["live_cones"]
+                    result["history"] = history_frame(eq, 400)
+                    result["last_price"] = live["last_price"]
+                    result["last_date"] = live["last_date"]
+                    result["forecast_errors"] = live.get("errors") or {}
+                    vm = build_viewmodel(result, name=name)
+            except Exception as e:
+                vm.forecast_errors["_recovery"] = str(e)[:200]
+
+        # Build charts even if probs empty (cone-only is still useful)
+        h = vm.primary_horizon()
+        cone = vm.cones.get(h)
+        fan = None
+        if vm.history is not None and len(vm.history) > 5 and cone is not None:
+            try:
+                fan = build_fan_figure(
+                    vm.history,
+                    cone,
+                    title=f"Kisaran harga · {vm.ticker} · {h} hari ke depan",
+                )
+            except Exception as e:
+                vm.forecast_errors["fan"] = str(e)[:160]
+        gauge = None
+        if vm.has_probs():
+            try:
+                gauge = build_prob_gauge_figure(vm.probs, title="Peluang naik per horizon")
+            except Exception as e:
+                vm.forecast_errors["gauge"] = str(e)[:160]
+        met = None
+        if vm.metrics is not None and len(vm.metrics):
+            try:
+                met = build_metrics_figure(
+                    vm.metrics,
+                    title="Brier vs tebakan sederhana (lebih rendah = lebih baik)",
+                )
+            except Exception as e:
+                vm.forecast_errors["metrics_fig"] = str(e)[:160]
 
         if vm.art_dir:
             raw_report = Path(vm.art_dir) / "prism_report.html"
@@ -603,43 +656,26 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
         write_prism_report(vm, raw_report)
         safe_report = _gradio_safe_file(raw_report)
 
-        h = vm.primary_horizon()
-        cone = vm.cones.get(h)
-        fan = None
-        if vm.history is not None and len(vm.history) and cone is not None:
-            fan = build_fan_figure(
-                vm.history,
-                cone,
-                title=f"Kisaran harga · {vm.ticker} · {h} hari ke depan",
-            )
-        gauge = build_prob_gauge_figure(vm.probs, title="Peluang naik per horizon")
-        met = None
-        if vm.metrics is not None and len(vm.metrics):
-            met = build_metrics_figure(
-                vm.metrics,
-                title="Brier vs tebakan sederhana (lebih rendah = lebih baik)",
-            )
-
-        summary = _summary_html(vm, name)
         fan_block = _frame(
             "Kisaran harga ke depan (cone)",
             "Garis putus-putus = median. Pita = rentang kemungkinan. Makin jauh, biasanya makin lebar.",
-            _fig_html(fan, 480),
+            _fig_html(fan, 480) if fan is not None else "<p class='hint'>Cone tidak bisa dibangun (data historis kurang).</p>",
             40,
         )
         gauge_block = _frame(
             "Peluang naik (P up)",
             "50% = koin. Jarak dari 50% = seberapa condong model — bukan jaminan.",
-            _fig_html(gauge, 280),
+            _fig_html(gauge, 280) if gauge is not None else "<p class='hint'>Probabilitas tidak tersedia untuk horizon ini.</p>",
             80,
         )
         met_block = _frame(
             "Kejujuran vs tebakan sederhana",
             "Base-rate = frekuensi historis naik. Jika model tidak mengalahkannya, anggap sinyal lemah.",
-            _fig_html(met, 320),
+            _fig_html(met, 320) if met is not None else "<p class='hint'>Walk-forward metrics tidak tersedia.</p>",
             120,
         )
 
+        cards = vm.summary_cards()
         table = pd.DataFrame(
             [
                 {
@@ -650,12 +686,64 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
                         "Ya" if c["beat_baseline"] is True else ("Tidak" if c["beat_baseline"] is False else "—")
                     ),
                 }
-                for c in vm.summary_cards()
+                for c in cards
             ]
         )
 
+        # Honest status: never claim full success with empty probs
+        if not vm.has_probs() and not vm.has_charts():
+            err_detail = "; ".join(f"{k}: {v}" for k, v in list(vm.forecast_errors.items())[:6])
+            summary = _summary_html_error(
+                "Hasil tidak lengkap",
+                "Pipeline selesai tapi tidak ada probabilitas maupun cone. "
+                f"Detail: {err_detail or 'unknown'}. Coba mode Standar, horizon lebih pendek, atau saham lain.",
+            )
+            yield pack(
+                summary,
+                fan_block,
+                gauge_block,
+                met_block,
+                table,
+                safe_report,
+                _status("Selesai dengan error — tidak ada angka/grafik.", "err"),
+            )
+            return
+
+        if not vm.has_probs():
+            summary = _summary_html(vm, name)
+            # inject warning
+            summary = summary.replace(
+                "Hasil analisis",
+                "Hasil parsial (cone saja)",
+            )
+            ferr = ""
+            if vm.forecast_errors:
+                ferr = "<p class='hint'>Catatan teknis: " + "; ".join(
+                    f"{k}={v}" for k, v in list(vm.forecast_errors.items())[:4]
+                ) + "</p>"
+            summary = summary + ferr + (
+                "<p class='lead'>Probabilitas model gagal dihitung; cone tetap ditampilkan dari volatilitas historis.</p>"
+            )
+            yield pack(
+                summary,
+                fan_block,
+                gauge_block,
+                met_block,
+                table,
+                safe_report,
+                _status("Selesai parsial — cone ada, probabilitas kosong.", "err"),
+            )
+            return
+
         if progress is not None:
             progress(1.0, desc="Selesai")
+
+        summary = _summary_html(vm, name)
+        if str(vm.regime) in ("n/a", "na", ""):
+            summary += (
+                "<p class='hint' style='margin-top:8px'>Catatan: mode Standar tidak menghitung "
+                "rezim pasar (n/a). Pilih Lanjutan jika ingin label suasana pasar.</p>"
+            )
 
         yield pack(
             summary,
