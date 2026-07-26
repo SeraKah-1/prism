@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from stock_prob.ui_gradio import (
     ALL_HORIZON_DAYS,
+    ALL_HORIZON_LABELS,
     ALL_HORIZONS_LABEL,
     _parse_horizon_label,
     _render_fan_from_session,
