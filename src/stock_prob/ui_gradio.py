@@ -467,13 +467,20 @@ Research software — not financial advice.
 
 
 def launch_gui(
-    share: bool = False,
-    server_name: str = "127.0.0.1",
+    share: bool | None = None,
+    server_name: str = "0.0.0.0",
     server_port: int | None = None,
     inline: bool = True,
 ) -> Any:
+    """
+    Launch Gradio Blocks.
+
+    Colab note: share=True is the reliable path. share=False often looks
+    "broken" or leaves users staring at previous cell outputs (ipywidgets).
+    """
     import gradio as gr
 
+    print("[Prism] build_app() …", UX_BUILD)
     demo = build_app()
     in_colab = False
     try:
@@ -482,6 +489,10 @@ def launch_gui(
         in_colab = True
     except Exception:
         pass
+
+    # Default share: True on Colab (reliable iframe + public temp URL)
+    if share is None:
+        share = bool(in_colab)
 
     kwargs: dict[str, Any] = {
         "share": share,
@@ -498,7 +509,11 @@ def launch_gui(
     if server_port:
         kwargs["server_port"] = server_port
     if in_colab:
-        kwargs.setdefault("share", False)
+        # quiet=False so user sees the gradio.live URL in logs
+        kwargs["quiet"] = False
+        print("[Prism] Colab → Gradio launch share=", share)
+        print("[Prism] Expect header:", UX_LABEL)
+        print("[Prism] If you still see Equity/Dom-index text boxes, that is OLD OUTPUT — clear cells.")
         return demo.launch(**kwargs)
     return demo.launch(server_name=server_name, **kwargs)
 
