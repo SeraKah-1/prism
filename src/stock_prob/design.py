@@ -10,8 +10,8 @@ Influences (taste, not clone):
 from __future__ import annotations
 
 # Visible stamp so Colab users can verify they loaded the polished build
-UX_BUILD = "PRISM_UX_2026_07_26_LIGHT_MOTION"
-UX_LABEL = "Prism UX · light paper · staged motion · v2026.07.26"
+UX_BUILD = "PRISM_UX_2026_07_26_HUMAN_V2"
+UX_LABEL = "Prism UX · human form · HTML charts · v2"
 
 # —— Tokens (light) ——
 BG = "#f6f3ee"          # warm paper
