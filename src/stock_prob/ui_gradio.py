@@ -67,6 +67,8 @@ HORIZON_CHOICES = [
     ("63 days (≈ 1 quarter)", 63),
     ("126 days (≈ 6 months)", 126),
     ("252 days (≈ 1 year)", 252),
+    ("504 days (≈ 2 years)", 504),
+    ("756 days (≈ 3 years)", 756),
 ]
 ALL_HORIZONS_LABEL = "All time horizons"
 ALL_HORIZON_DAYS = [h for _, h in HORIZON_CHOICES]
@@ -485,6 +487,8 @@ def _horizon_label(h: int) -> str:
         63: "63d · ~1 quarter",
         126: "126d · ~6 months",
         252: "252d · ~1 year",
+        504: "504d · ~2 years",
+        756: "756d · ~3 years",
     }
     return mapping.get(int(h), f"{int(h)}d ahead")
 
@@ -493,10 +497,8 @@ def _parse_horizon_label(horizon_label: str | None, default: int | None = None) 
     """
     Map UI labels → trading-day horizon.
 
-    Chart radios use labels like ``5d · ~1 week``. Naively joining *all* digits
-    yields ``51`` (and ``211``, ``2521``…), so the fan chart never finds the
-    real cone and falls back to a wrong nearest match — looks stuck on one chart.
-    Always take the *first* digit group via ``parse_horizon_key``.
+    Chart radios and simulation dropdowns use labels like ``21d · ~1 month`` or ``252 days (≈ 1 year)``.
+    This function handles both long checkbox labels and short dropdown/radio labels accurately.
     """
     if horizon_label is None:
         return default
@@ -506,6 +508,10 @@ def _parse_horizon_label(horizon_label: str | None, default: int | None = None) 
     # Exact match against run-time checkbox labels
     for lab, days in HORIZON_CHOICES:
         if s == lab:
+            return int(days)
+    # Check against short _horizon_label format
+    for days in (5, 21, 63, 126, 252, 504, 756):
+        if s == _horizon_label(days):
             return int(days)
     # Chart / sim short labels: "21d · ~1 month", "252d ahead", raw "21"
     h = parse_horizon_key(s)
@@ -1240,6 +1246,16 @@ def build_app():
             on_horizon_change,
             inputs=[session_state, chart_horizon],
             outputs=[fan],
+        )
+        sim_horizon.change(
+            on_simulate,
+            inputs=[session_state, entry_price, sim_horizon, sim_side],
+            outputs=[sim_out],
+        )
+        sim_side.change(
+            on_simulate,
+            inputs=[session_state, entry_price, sim_horizon, sim_side],
+            outputs=[sim_out],
         )
         sim_btn.click(
             on_simulate,
