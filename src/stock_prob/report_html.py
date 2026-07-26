@@ -45,13 +45,16 @@ def write_prism_report(vm: PrismViewModel, path: str | Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     h = vm.primary_horizon()
-    cone = vm.cones.get(h) or vm.cones.get(str(h))
+    cone = vm.cones.get(h)
+    if cone is None:
+        cone = vm.cones.get(str(h))
     if cone is None and vm.cones:
-        # any cone
         cone = next(iter(vm.cones.values()))
     fan = None
     try:
-        if vm.history is not None and len(vm.history) and cone is not None and len(cone):
+        hist_ok = vm.history is not None and len(vm.history) > 0
+        cone_ok = cone is not None and len(cone) > 0
+        if hist_ok and cone_ok:
             fan = build_fan_figure(
                 vm.history,
                 cone,
@@ -61,7 +64,7 @@ def write_prism_report(vm: PrismViewModel, path: str | Path) -> Path:
         fan = None
     met_fig = None
     try:
-        if vm.metrics is not None and len(vm.metrics):
+        if vm.metrics is not None and len(vm.metrics) > 0:
             met_fig = build_metrics_figure(vm.metrics, title="Brier score vs baselines")
     except Exception:
         met_fig = None
