@@ -17,7 +17,7 @@ from stock_prob.pipeline import run_pipeline  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Stock Probability Engine demo")
+    p = argparse.ArgumentParser(description="Prism demo — equity probability lab")
     p.add_argument("--config", type=str, default=None, help="Path to YAML/JSON run config")
     p.add_argument(
         "--equities",

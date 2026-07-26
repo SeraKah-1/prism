@@ -152,7 +152,7 @@ def write_html_report(
   </style>
 </head>
 <body>
-  <h1>Stock Probability Engine — Run Report</h1>
+  <h1>Prism — Run Report</h1>
   <div class="card"><h2>Meta</h2>{meta_html}</div>
   <div class="card"><h2>P(up) by horizon</h2>{probs_html}</div>
   <div class="card"><h2>Fan chart</h2>{fan_div}</div>

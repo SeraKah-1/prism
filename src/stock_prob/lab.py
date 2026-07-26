@@ -285,7 +285,7 @@ h1,h2{{color:#38bdf8}} a{{color:#7dd3fc}}
 table{{border-collapse:collapse;width:100%;font-size:13px}}
 th,td{{border-bottom:1px solid #334155;padding:6px 8px;text-align:left}}
 </style></head><body>
-<h1>Stock Probability Engine — Full Lab</h1>
+<h1>Prism — Full Lab</h1>
 <div class="card"><p><b>lab_id</b>: {lab_id}<br/><b>created</b>: {datetime.now(timezone.utc).isoformat()}<br/>
 <b>equities</b>: {', '.join(equities)}</p></div>
 <div class="card"><h2>Country skill (IDX vs US)</h2>{country_html}</div>
