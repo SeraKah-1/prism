@@ -40,7 +40,7 @@ print("THEME    :", BG, ACCENT)
 print("CWD      :", os.getcwd())
 print("=" * 64)
 assert stock_prob.__file__.startswith("/content/prism/"), stock_prob.__file__
-assert "HUMAN_V7" in UX_BUILD, f"Wrong build {UX_BUILD} — delete runtime and re-run"
+assert "HUMAN_V8" in UX_BUILD, f"Wrong build {UX_BUILD} — delete runtime and re-run"
 
 from stock_prob.ui_colab import launch_gui
 
