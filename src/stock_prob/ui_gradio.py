@@ -1,17 +1,21 @@
 """
-Prism Gradio UI — human-first, charts as HTML (reliable in Colab/share).
+Prism Gradio UI — human-first layout (shadcn-like cards), reliable charts & files.
 
-Design principles:
-- One smart search (not dual search/match boxes)
-- Human labels for indexes (not only ^JKSE)
-- Horizons with day units; Advanced mode hides GARCH jargon
-- Charts via embedded Plotly HTML (avoids Gradio Plot broken-image on share)
-- Report inline + download file (never raw /content paths as the only output)
+Layout model (inspired by shadcn dashboard + card primitives):
+  page > section.card > section.head + section.body
+  fixed gap, 1px border, clear frames so plots never bleed into each other.
+
+Files: always copy reports into /tmp/prism_gradio_exports for gr.File
+  (Gradio blocks paths outside cwd/temp unless allowed_paths).
+
+Copy: pure HTML for tips (no Markdown ** inside HTML that shows as asterisks).
 """
 from __future__ import annotations
 
+import shutil
 import tempfile
 import traceback
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +24,6 @@ import pandas as pd
 from stock_prob.design import UX_BUILD
 from stock_prob.report_html import write_prism_report
 from stock_prob.tickers import (
-    default_context_for_symbol,
     parse_symbol_from_label,
     resolve_ticker,
     search_labels,
@@ -30,104 +33,181 @@ from stock_prob.ui_colab import run_once
 from stock_prob.viewmodel import build_viewmodel
 from stock_prob.viz import build_fan_figure, build_metrics_figure, build_prob_gauge_figure
 
-# Friendly index presets (values still Yahoo symbols under the hood — user sees labels)
+# —— Human labels (Yahoo symbols only behind the scenes) ——
 INDEX_PRESETS = {
-    "Indonesia · IHSG (Jakarta Composite)": {
+    "Indonesia · IHSG (Jakarta)": {
         "domestic_index": "^JKSE",
         "us_index": "^GSPC",
         "macro": "^VIX",
-        "hint": "Saham IDX (.JK) · domestik IHSG · spillover S&P 500 · regime VIX",
+        "hint": "Untuk saham IDX. Acuan: IHSG + pengaruh S&P 500 + suasana pasar (VIX).",
     },
     "United States · S&P 500 + VIX": {
         "domestic_index": "^GSPC",
         "us_index": "^GSPC",
         "macro": "^VIX",
-        "hint": "Saham US · beta ke S&P 500 · volatilitas VIX",
+        "hint": "Untuk saham AS. Acuan: S&P 500 + volatilitas pasar (VIX).",
     },
-    "Global · S&P 500 + Dollar (DXY)": {
+    "Global · S&P 500 + USD (DXY)": {
         "domestic_index": "^GSPC",
         "us_index": "^GSPC",
         "macro": "DX-Y.NYB",
-        "hint": "S&P 500 + kekuatan USD (relevan emerging markets)",
+        "hint": "S&P 500 + kekuatan dollar (sering relevan emerging market).",
     },
 }
 
 HORIZON_CHOICES = [
-    ("5 days (1 week)", 5),
-    ("21 days (~1 month)", 21),
-    ("63 days (~1 quarter)", 63),
-    ("126 days (~6 months)", 126),
-    ("252 days (~1 year)", 252),
+    ("5 hari (≈ 1 minggu)", 5),
+    ("21 hari (≈ 1 bulan)", 21),
+    ("63 hari (≈ 1 kuartal)", 63),
+    ("126 hari (≈ 6 bulan)", 126),
+    ("252 hari (≈ 1 tahun)", 252),
 ]
 
+GRADIO_EXPORT_DIR = Path(tempfile.gettempdir()) / "prism_gradio_exports"
 
+
+def _gradio_safe_file(src: Path) -> str:
+    """Copy into /tmp so gr.File accepts it (cwd may be /content/prism)."""
+    GRADIO_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    dst = GRADIO_EXPORT_DIR / f"{src.stem}_{uuid.uuid4().hex[:8]}{src.suffix}"
+    shutil.copy2(src, dst)
+    return str(dst)
+
+
+# —— CSS: card primitives, clear frames, no sticky overlap ——
 PRISM_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap');
 
+:root {
+  --bg: #f6f3ee;
+  --card: #fffcf7;
+  --fg: #1c1917;
+  --muted: #78716c;
+  --border: #e7e0d5;
+  --accent: #0f3d3e;
+  --radius: 16px;
+  --gap: 16px;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 .gradio-container {
-  max-width: 980px !important;
+  max-width: 960px !important;
   margin: 0 auto !important;
   font-family: "DM Sans", system-ui, sans-serif !important;
   background:
-    radial-gradient(900px 400px at 0% 0%, #e4efe9 0%, transparent 55%),
-    radial-gradient(700px 360px at 100% 0%, #f3e9df 0%, transparent 50%),
-    #f6f3ee !important;
-  padding-bottom: 40px !important;
+    radial-gradient(900px 380px at 0% 0%, #e4efe9 0%, transparent 55%),
+    radial-gradient(720px 340px at 100% 0%, #f3e9df 0%, transparent 50%),
+    var(--bg) !important;
+  color: var(--fg) !important;
+  padding: 12px 12px 48px !important;
 }
 footer { display: none !important; }
 
-.prism-hero h1 {
-  font-size: clamp(1.75rem, 3vw, 2.25rem) !important;
-  letter-spacing: -0.04em !important;
-  font-weight: 700 !important;
-  margin: 0 0 8px !important;
-  color: #1c1917 !important;
+/* kill markdown asterisk glitches: we mostly use HTML */
+.prose, .markdown-body { max-width: 100% !important; }
+
+.hero { padding: 8px 4px 12px; animation: rise 0.55s var(--ease) both; }
+.hero .kicker {
+  font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+  font-weight: 600; color: var(--accent); margin: 0 0 6px;
 }
-.prism-hero p { color: #78716c !important; margin: 0 !important; max-width: 58ch; line-height: 1.5; }
-.prism-kicker {
-  font-size: 11px !important; letter-spacing: 0.14em !important;
-  text-transform: uppercase !important; font-weight: 600 !important;
-  color: #0f3d3e !important; margin-bottom: 6px !important;
+.hero h1 {
+  margin: 0 0 8px !important; font-size: clamp(1.7rem, 3vw, 2.2rem) !important;
+  letter-spacing: -0.04em !important; font-weight: 700 !important; color: var(--fg) !important;
+}
+.hero p { margin: 0 !important; color: var(--muted) !important; line-height: 1.5; max-width: 56ch; }
+
+/* shadcn-like card */
+.card {
+  background: var(--card) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  padding: 16px !important;
+  margin: 0 0 var(--gap) !important;
+  box-shadow: 0 1px 0 rgba(28,25,23,0.03), 0 14px 36px -28px rgba(28,25,23,0.35) !important;
+  animation: rise 0.55s var(--ease) both;
+}
+.card + .card { margin-top: 0 !important; }
+
+.section-title {
+  margin: 0 0 4px !important;
+  font-size: 0.95rem !important;
+  font-weight: 650 !important;
+  letter-spacing: -0.02em !important;
+  color: var(--fg) !important;
+}
+.hint {
+  margin: 0 0 12px !important;
+  font-size: 12.5px !important;
+  color: var(--muted) !important;
+  line-height: 1.45 !important;
 }
 
-.prism-card {
-  background: #fffcf7 !important;
-  border: 1px solid #e7e0d5 !important;
-  border-radius: 16px !important;
-  padding: 14px !important;
-  box-shadow: 0 12px 32px -28px rgba(28,25,23,0.4) !important;
+/* result frames — hard clip so plots stay inside */
+.frame {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin: 0 0 var(--gap);
+  box-shadow: 0 12px 32px -28px rgba(28,25,23,0.4);
+  animation: rise 0.6s var(--ease) both;
 }
+.frame-head {
+  padding: 12px 16px 8px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card) 90%, #efeae2);
+}
+.frame-head h3 {
+  margin: 0 !important; font-size: 0.92rem !important;
+  letter-spacing: -0.02em !important; font-weight: 650 !important;
+}
+.frame-head p {
+  margin: 4px 0 0 !important; font-size: 12px !important; color: var(--muted) !important;
+}
+.frame-body {
+  padding: 10px 12px 14px;
+  min-height: 80px;
+  overflow: auto;
+  max-width: 100%;
+}
+.frame-body .plotly-graph-div,
+.frame-body .js-plotly-plot {
+  max-width: 100% !important;
+}
+
+.summary {
+  background: linear-gradient(125deg, #dcece7 0%, #fffcf7 52%, #f3ebe3 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-bottom: var(--gap);
+  animation: rise 0.5s var(--ease) both;
+}
+.summary h2 {
+  margin: 0 0 6px !important; font-size: 1.35rem !important;
+  letter-spacing: -0.03em !important;
+}
+.summary .lead { margin: 8px 0 0; color: #44403c; line-height: 1.55; font-size: 0.97rem; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.pill {
+  font-size: 12px; font-weight: 600; border-radius: 999px;
+  padding: 5px 11px; border: 1px solid var(--border); background: #fff; color: #57534e;
+}
+.pill.up { background: #e6f5ec; color: #1b7a4e; border-color: #b7e0c7; }
+.pill.down { background: #fdecea; color: #b42318; border-color: #f2c1bc; }
+.pill.ok { background: #e7f1ef; color: #0f3d3e; }
 
 button.primary {
   border-radius: 12px !important;
-  background: #0f3d3e !important;
+  background: var(--accent) !important;
   font-weight: 600 !important;
+  min-height: 44px !important;
 }
 
-.prism-result-card {
-  background: linear-gradient(125deg, #dcece7 0%, #fffcf7 50%, #f3ebe3 100%);
-  border: 1px solid #e7e0d5;
-  border-radius: 16px;
-  padding: 16px 18px;
-  margin-bottom: 12px;
-  animation: rise 0.55s cubic-bezier(0.16,1,0.3,1) both;
-}
-.prism-result-card h2 { margin: 0 0 6px; letter-spacing: -0.03em; font-size: 1.4rem; color: #1c1917; }
-.prism-result-card .lead { color: #44403c; font-size: 0.98rem; line-height: 1.5; margin: 8px 0 0; }
-.prism-pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.prism-pill {
-  font-size: 12px; font-weight: 600; border-radius: 999px; padding: 5px 11px;
-  border: 1px solid #e7e0d5; background: #fff; color: #57534e;
-}
-.prism-pill.up { background: #e6f5ec; color: #1b7a4e; border-color: #b7e0c7; }
-.prism-pill.down { background: #fdecea; color: #b42318; border-color: #f2c1bc; }
-.prism-pill.ok { background: #e7f1ef; color: #0f3d3e; }
-.chart-frame {
-  background: #fffcf7; border: 1px solid #e7e0d5; border-radius: 16px;
-  padding: 8px; margin: 10px 0; overflow: hidden;
-  animation: rise 0.65s cubic-bezier(0.16,1,0.3,1) both;
-}
-.micro { font-size: 12px; color: #78716c; margin: 2px 0 8px; }
+/* spacing between Gradio rows inside a card */
+.card .gr-row, .card .gap { gap: 10px !important; }
+
 @keyframes rise {
   from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }
@@ -135,20 +215,30 @@ button.primary {
 """
 
 
-def _fig_to_html(fig: Any, height: int = 460) -> str:
-    """Embed Plotly as self-contained HTML — works on Gradio share (no broken image)."""
+def _fig_html(fig: Any, height: int = 440) -> str:
     if fig is None:
-        return '<div class="chart-frame"><p class="micro">Chart unavailable.</p></div>'
+        return '<p class="hint" style="padding:12px">Grafik belum tersedia.</p>'
     try:
-        fig.update_layout(height=height, margin=dict(l=40, r=20, t=48, b=40))
-        inner = fig.to_html(
+        fig.update_layout(height=height, margin=dict(l=44, r=18, t=44, b=40))
+        return fig.to_html(
             full_html=False,
             include_plotlyjs="cdn",
             config={"displayModeBar": False, "responsive": True},
         )
-        return f'<div class="chart-frame">{inner}</div>'
     except Exception as e:
-        return f'<div class="chart-frame"><p class="micro">Chart error: {e}</p></div>'
+        return f'<p class="hint" style="padding:12px">Gagal merender grafik: {e}</p>'
+
+
+def _frame(title: str, hint: str, body_html: str, delay_ms: int = 0) -> str:
+    return f"""
+<section class="frame" style="animation-delay:{delay_ms}ms">
+  <div class="frame-head">
+    <h3>{title}</h3>
+    <p>{hint}</p>
+  </div>
+  <div class="frame-body">{body_html}</div>
+</section>
+"""
 
 
 def _choices(q: str) -> list[str]:
@@ -160,7 +250,6 @@ def _choices(q: str) -> list[str]:
 
 
 def on_type_search(query: str):
-    """Single-box typeahead: typing updates the same dropdown choices + value."""
     import gradio as gr
 
     ch = _choices(query)
@@ -169,122 +258,101 @@ def on_type_search(query: str):
 
 
 def on_pick_ticker(label: str, market_preset: str):
-    """When user picks a match, auto-set market preset if still default-ish."""
     sym = parse_symbol_from_label(label or "")
     if not sym:
-        return market_preset, "_Ketik nama perusahaan atau kode saham, lalu pilih saran._"
-    # auto market from symbol
-    if sym.upper().endswith(".JK"):
-        preset = "Indonesia · IHSG (Jakarta Composite)"
-    else:
-        preset = "United States · S&P 500 + VIX"
+        return market_preset, "Ketik nama perusahaan atau kode, lalu pilih saran."
+    preset = (
+        "Indonesia · IHSG (Jakarta)"
+        if sym.upper().endswith(".JK")
+        else "United States · S&P 500 + VIX"
+    )
     hits = search_tickers(sym, max_results=2)
     name = hits[0].name if hits else sym
-    return preset, f"Dipilih **{sym}** — {name}. Pasar diset otomatis (bisa diganti di bawah)."
+    # HTML status — no markdown asterisks
+    msg = (
+        f'<p class="hint" style="margin:0">Dipilih <b>{sym}</b> — {name}. '
+        f"Pasar diset otomatis (boleh diganti).</p>"
+    )
+    return preset, msg
 
 
 def on_market_change(preset: str):
-    info = INDEX_PRESETS.get(preset) or INDEX_PRESETS["United States · S&P 500 + VIX"]
-    return info["hint"]
+    info = INDEX_PRESETS.get(preset) or next(iter(INDEX_PRESETS.values()))
+    return f'<p class="hint" style="margin:0">{info["hint"]}</p>'
 
 
-def _human_summary(vm, name: str) -> str:
+def _summary_html(vm, name: str) -> str:
     cards = vm.summary_cards()
     if not cards:
         lead = "Model belum menghasilkan probabilitas untuk horizon yang dipilih."
     else:
-        # pick shortest horizon for headline
         c0 = cards[0]
         direction = "naik" if c0["direction"] == "up" else "turun"
-        conf = "cukup yakin" if c0["conviction"] >= 0.25 else "hampir netral / ragu"
+        conf = "cukup condong" if c0["conviction"] >= 0.25 else "hampir netral"
         beat = sum(1 for c in cards if c.get("beat_baseline") is True)
         lead = (
-            f"Untuk **{vm.ticker}**, model memperkirakan peluang harga **{direction}** "
-            f"dalam ~**{c0['horizon']} hari** sekitar **{c0['prob_up']*100:.0f}%** ({conf}). "
-            f"Pada {beat}/{len(cards)} horizon, skor model **lebih baik** dari tebakan base-rate."
+            f"Untuk <b>{vm.ticker}</b>, model memperkirakan peluang harga "
+            f"<b>{direction}</b> dalam ~<b>{c0['horizon']} hari</b> sekitar "
+            f"<b>{c0['prob_up']*100:.0f}%</b> ({conf}). "
+            f"Pada <b>{beat}/{len(cards)}</b> horizon, skor model lebih baik "
+            f"daripada tebakan base-rate."
         )
-
-    pills = []
+    pills = [
+        f'<span class="pill ok">suasana: {vm.regime}</span>'
+    ]
     for c in cards:
         cls = "up" if c["direction"] == "up" else "down"
         beat = c.get("beat_baseline")
         tag = " · unggul base" if beat is True else (" · kalah base" if beat is False else "")
         pills.append(
-            f'<span class="prism-pill {cls}">{c["horizon"]} hari · '
+            f'<span class="pill {cls}">{c["horizon"]} hari · '
             f'P(naik) {c["prob_up"]*100:.1f}%{tag}</span>'
         )
-    regime_pill = f'<span class="prism-pill ok">suasana pasar: {vm.regime}</span>'
-
+    price = f"{vm.last_price:,.2f}" if vm.last_price == vm.last_price else "—"
     return f"""
-<div class="prism-result-card">
-  <div class="prism-kicker">Hasil analisis</div>
-  <h2>{vm.ticker} <span style="color:#78716c;font-weight:500;font-size:.72em">{name}</span></h2>
-  <div class="micro">Harga terakhir <b>{vm.last_price:,.2f}</b> · data s.d. <b>{vm.asof}</b></div>
+<div class="summary">
+  <div class="kicker" style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;color:#0f3d3e">Hasil analisis</div>
+  <h2>{vm.ticker} <span style="color:#78716c;font-weight:500;font-size:.72em">{name if name != vm.ticker else ""}</span></h2>
+  <div class="hint" style="margin:0">Harga terakhir <b>{price}</b> · data s.d. <b>{vm.asof or "—"}</b></div>
   <p class="lead">{lead}</p>
-  <div class="prism-pills">{regime_pill}{''.join(pills)}</div>
-  <p class="micro" style="margin-top:12px">
-    Cone di bawah = rentang kemungkinan harga (bukan ramalan satu garis).
-    Band lebih lebar = model lebih tidak yakin.
-  </p>
+  <div class="pills">{''.join(pills)}</div>
 </div>
 """
 
 
-def run_analysis(
-    ticker_label: str,
-    market_preset: str,
-    horizon_labels: list[str],
-    mode: str,
-    progress=None,
-):
-    empty_html = '<div class="chart-frame"><p class="micro">Jalankan analisis untuk melihat grafik.</p></div>'
+def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=None):
+    empty = _frame("Menunggu", "Jalankan analisis untuk mengisi panel ini.", "<p class='hint'>Belum ada data.</p>")
     try:
         if progress:
-            progress(0.08, desc="Mencari & memvalidasi saham…")
+            progress(0.08, desc="Memvalidasi saham…")
 
         resolved = resolve_ticker(ticker_label or "")
         if not resolved.get("ok"):
-            err = (
-                f'<div class="prism-result-card"><h2>Saham tidak ditemukan</h2>'
-                f'<p class="lead">Coba nama perusahaan (mis. <i>bank central asia</i>) '
-                f'atau kode (mis. <i>BBCA</i> / <i>AAPL</i>). '
-                f'Detail: {resolved.get("error")}</p></div>'
+            err = _summary_html_error(
+                "Saham tidak ditemukan",
+                "Coba nama perusahaan (contoh: bank central asia) atau kode (BBCA, AAPL).",
             )
-            return err, empty_html, empty_html, empty_html, pd.DataFrame(), None, ""
+            return err, empty, empty, empty, pd.DataFrame(), None, "Gagal: saham tidak ditemukan."
 
         symbol = resolved["symbol"]
         name = resolved.get("name") or symbol
-        preset = INDEX_PRESETS.get(market_preset) or INDEX_PRESETS["United States · S&P 500 + VIX"]
-        # still allow symbol to override market if IDX vs US mismatch mild
-        ctx = default_context_for_symbol(symbol)
-        # Prefer explicit user market preset
-        domestic = preset["domestic_index"]
-        us_index = preset["us_index"]
-        macro = preset["macro"]
-        # If user picked Indonesia preset but US stock, keep preset (user intent)
-        # If IDX stock and US preset, nudge domestic to JKSE for better model
+        preset = INDEX_PRESETS.get(market_preset) or next(iter(INDEX_PRESETS.values()))
+        domestic, us_index, macro = preset["domestic_index"], preset["us_index"], preset["macro"]
         if symbol.upper().endswith(".JK") and domestic == "^GSPC":
             domestic = "^JKSE"
 
-        # parse horizons from friendly labels
         label_to_h = {lab: h for lab, h in HORIZON_CHOICES}
-        hz = []
+        hz: list[int] = []
         for lab in horizon_labels or []:
             if lab in label_to_h:
                 hz.append(label_to_h[lab])
-            else:
-                # fallback parse leading int
-                try:
-                    hz.append(int(str(lab).split()[0]))
-                except Exception:
-                    pass
         if not hz:
             hz = [5, 21, 252]
 
-        use_lab = (mode or "").lower().startswith("advanced") or (mode or "").lower().startswith("lanjutan")
+        use_lab = str(mode).lower().startswith("lanjutan")
 
         if progress:
-            progress(0.25, desc=f"Menghitung model untuk {symbol}…")
+            progress(0.28, desc=f"Menghitung model {symbol}…")
 
         result = run_once(
             symbol,
@@ -297,18 +365,18 @@ def run_analysis(
         )
 
         if progress:
-            progress(0.7, desc="Menyusun grafik & laporan…")
+            progress(0.72, desc="Merender grafik…")
 
         vm = build_viewmodel(result, name=name)
 
-        # Always write report to temp + art_dir; expose as downloadable file
-        report_path = None
+        # Write report under art_dir then copy to /tmp for Gradio File
         if vm.art_dir:
-            report_path = Path(vm.art_dir) / "prism_report.html"
-            write_prism_report(vm, report_path)
+            raw_report = Path(vm.art_dir) / "prism_report.html"
         else:
-            report_path = Path(tempfile.gettempdir()) / f"prism_{symbol.replace('.','_')}.html"
-            write_prism_report(vm, report_path)
+            raw_report = GRADIO_EXPORT_DIR / f"prism_{uuid.uuid4().hex[:8]}.html"
+            raw_report.parent.mkdir(parents=True, exist_ok=True)
+        write_prism_report(vm, raw_report)
+        safe_report = _gradio_safe_file(raw_report)
 
         h = vm.primary_horizon()
         cone = vm.cones.get(h)
@@ -317,162 +385,192 @@ def run_analysis(
             fan = build_fan_figure(
                 vm.history,
                 cone,
-                title=f"Kisaran kemungkinan harga · {vm.ticker} · {h} hari ke depan",
+                title=f"Kisaran harga · {vm.ticker} · {h} hari ke depan",
             )
-        gauge = build_prob_gauge_figure(vm.probs, title="Peluang naik (P up) per horizon")
+        gauge = build_prob_gauge_figure(vm.probs, title="Peluang naik per horizon")
         met = None
         if vm.metrics is not None and len(vm.metrics):
             met = build_metrics_figure(
                 vm.metrics,
-                title="Seberapa jujur model vs tebakan sederhana (Brier ↓ lebih baik)",
+                title="Brier vs tebakan sederhana (lebih rendah = lebih baik)",
             )
 
-        summary = _human_summary(vm, name)
-        fan_html = _fig_to_html(fan, 500)
-        gauge_html = _fig_to_html(gauge, 280)
-        met_html = _fig_to_html(met, 340)
+        summary = _summary_html(vm, name)
+        fan_block = _frame(
+            "Kisaran harga ke depan (cone)",
+            "Garis putus-putus = median. Pita = rentang kemungkinan. Makin jauh, biasanya makin lebar.",
+            _fig_html(fan, 480),
+            40,
+        )
+        gauge_block = _frame(
+            "Peluang naik (P up)",
+            "50% = koin. Jarak dari 50% = seberapa condong model — bukan jaminan.",
+            _fig_html(gauge, 280),
+            80,
+        )
+        met_block = _frame(
+            "Kejujuran vs tebakan sederhana",
+            "Base-rate = frekuensi historis naik. Jika model tidak mengalahkannya, anggap sinyal lemah.",
+            _fig_html(met, 320),
+            120,
+        )
 
-        # Friendly table
-        rows = []
-        for c in vm.summary_cards():
-            rows.append(
+        table = pd.DataFrame(
+            [
                 {
                     "Horizon": f"{c['horizon']} hari",
-                    "Peluang naik %": round(c["prob_up"] * 100, 1),
+                    "Peluang naik (%)": round(c["prob_up"] * 100, 1),
                     "Arah": "Naik" if c["direction"] == "up" else "Turun",
                     "Lebih baik dari base-rate?": (
                         "Ya" if c["beat_baseline"] is True else ("Tidak" if c["beat_baseline"] is False else "—")
                     ),
                 }
-            )
-        table = pd.DataFrame(rows)
-
-        # Inline mini-report excerpt note (download has full)
-        note = (
-            f"<p class='micro'>Laporan lengkap (grafik + tabel) bisa diunduh di bawah. "
-            f"Mode: <b>{'Lanjutan' if use_lab else 'Standar'}</b> · "
-            f"Konteks: {market_preset}</p>"
+                for c in vm.summary_cards()
+            ]
         )
 
         if progress:
             progress(1.0, desc="Selesai")
 
         return (
-            summary + note,
-            fan_html,
-            gauge_html,
-            met_html,
+            summary,
+            fan_block,
+            gauge_block,
+            met_block,
             table,
-            str(report_path) if report_path else None,
-            "Selesai. Scroll untuk cone & unduh laporan HTML bila perlu.",
+            safe_report,
+            "Selesai. Scroll ke bawah untuk cone; unduh laporan HTML jika perlu.",
         )
-
     except Exception:
         err = traceback.format_exc()
         msg = (
-            f'<div class="prism-result-card"><h2>Gagal menghitung</h2>'
-            f'<pre style="white-space:pre-wrap;font-size:11px;color:#78716c">{err[-2000:]}</pre></div>'
+            f'<div class="summary"><h2>Gagal menghitung</h2>'
+            f'<pre style="white-space:pre-wrap;font-size:11px;color:#78716c">{err[-1800:]}</pre></div>'
         )
-        return msg, empty_html, empty_html, empty_html, pd.DataFrame(), None, "Error — lihat pesan di atas."
+        return msg, empty, empty, empty, pd.DataFrame(), None, "Terjadi error."
+
+
+def _summary_html_error(title: str, body: str) -> str:
+    return f'<div class="summary"><h2>{title}</h2><p class="lead">{body}</p></div>'
 
 
 def build_app():
     import gradio as gr
 
-    # Seed dropdown with a live search (not a hardcoded product universe)
-    seed = _choices("stock") or _choices("bank") or []
+    seed = _choices("bank") or _choices("stock") or []
 
     with gr.Blocks(title="Prism") as demo:
+        # —— HERO ——
         gr.HTML(
             """
-            <div class="prism-hero">
-              <div class="prism-kicker">Prism</div>
+            <div class="hero">
+              <div class="kicker">Prism</div>
               <h1>Analisis peluang pergerakan saham</h1>
-              <p>Cari perusahaan, pilih horizon, lihat <b>kisaran harga (cone)</b> dan
-              peluang naik — dibandingkan tebakan sederhana (base rate), bukan ramalan absolut.</p>
+              <p>Cari perusahaan, pilih jangka waktu, lihat kisaran harga (cone) dan peluang naik —
+              dibandingkan tebakan sederhana, bukan ramalan absolut.</p>
             </div>
             """
         )
 
-        with gr.Group(elem_classes=["prism-card"]):
-            gr.Markdown("### 1. Pilih saham")
-            gr.Markdown(
-                "<p class='micro'>Ketik **nama** atau **kode** (contoh: <code>bank central asia</code>, "
-                "<code>BBCA</code>, <code>Apple</code>). Saran muncul di daftar di bawah — "
-                "pilih salah satu.</p>"
+        # —— INPUT CARD ——
+        with gr.Group(elem_classes=["card"]):
+            gr.HTML(
+                """
+                <div class="section-title">1 · Pilih saham</div>
+                <p class="hint">Ketik nama atau kode (contoh: bank central asia, BBCA, Apple).
+                Pilih salah satu saran di daftar — tidak perlu menghafal format Yahoo.</p>
+                """
             )
             search = gr.Textbox(
-                label="Cari saham",
-                placeholder="Contoh: BBCA, telkom, apple, bank central asia…",
+                label="Cari",
+                placeholder="bank central asia · BBCA · Apple · telkom",
                 lines=1,
             )
             ticker = gr.Dropdown(
-                label="Pilih dari hasil pencarian",
+                label="Hasil pencarian (pilih satu)",
                 choices=seed,
                 value=seed[0] if seed else None,
                 allow_custom_value=True,
                 filterable=True,
-                info="Diperbarui otomatis saat Anda mengetik di kotak pencarian.",
             )
-            status = gr.Markdown("Mulai ketik di kotak pencarian.")
+            status = gr.HTML('<p class="hint" style="margin:0">Mulai ketik di kotak Cari.</p>')
 
-            gr.Markdown("### 2. Konteks pasar")
-            gr.Markdown(
-                "<p class='micro'>Dipakai model untuk membandingkan saham ke **indeks pasar** "
-                "(bukan input rahasia). Pilih bahasa manusia — kode Yahoo diurus di belakang.</p>"
+            gr.HTML(
+                """
+                <div class="section-title" style="margin-top:14px">2 · Konteks pasar</div>
+                <p class="hint">Dipakai model untuk membandingkan saham ke indeks pasar (otomatis, berlabel jelas).</p>
+                """
             )
             market = gr.Radio(
                 choices=list(INDEX_PRESETS.keys()),
-                value="Indonesia · IHSG (Jakarta Composite)",
-                label="Pasar & indeks acuan",
+                value="Indonesia · IHSG (Jakarta)",
+                label="Pasar acuan",
             )
-            market_hint = gr.Markdown(INDEX_PRESETS["Indonesia · IHSG (Jakarta Composite)"]["hint"])
+            market_hint = gr.HTML(
+                f'<p class="hint" style="margin:0">{INDEX_PRESETS["Indonesia · IHSG (Jakarta)"]["hint"]}</p>'
+            )
 
-            gr.Markdown("### 3. Horizon waktu")
+            gr.HTML(
+                """
+                <div class="section-title" style="margin-top:14px">3 · Jangka waktu</div>
+                <p class="hint">Dalam hari bursa. Boleh centang lebih dari satu.</p>
+                """
+            )
             horizons = gr.CheckboxGroup(
                 choices=[lab for lab, _ in HORIZON_CHOICES],
-                value=["5 days (1 week)", "21 days (~1 month)", "252 days (~1 year)"],
-                label="Jangka waktu prediksi (hari bursa)",
-                info="Centang satu atau lebih. 5 hari = sekitar 1 minggu perdagangan.",
+                value=["5 hari (≈ 1 minggu)", "21 hari (≈ 1 bulan)", "252 hari (≈ 1 tahun)"],
+                label="Horizon",
             )
 
-            gr.Markdown("### 4. Mode analisis")
+            gr.HTML(
+                """
+                <div class="section-title" style="margin-top:14px">4 · Mode</div>
+                <p class="hint">Standar cukup untuk cone & peluang naik. Lanjutan menambah detail statistik (lebih lambat).</p>
+                """
+            )
             mode = gr.Radio(
                 choices=[
-                    "Standar — cepat, cukup untuk lihat cone & P(naik)",
-                    "Lanjutan — lebih detail (volatilitas dinamis, rezim pasar, turnamen model)",
+                    "Standar — cepat",
+                    "Lanjutan — detail ekstra (lebih lambat)",
                 ],
-                value="Standar — cepat, cukup untuk lihat cone & P(naik)",
-                label="Mode",
-                info="Pilih Lanjutan hanya jika Anda ingin detail statistik ekstra.",
+                value="Standar — cepat",
+                label="Mode analisis",
             )
 
             run_btn = gr.Button("Jalankan analisis", variant="primary")
-            run_status = gr.Markdown("")
+            run_status = gr.HTML("")
 
-        with gr.Column():
-            summary = gr.HTML()
-            gr.Markdown("### Kisaran harga ke depan (probability cone)")
-            gr.Markdown(
-                "<p class='micro'>Garis putus-putus = median. Pita = rentang kemungkinan. "
-                "Makin jauh ke depan, biasanya makin lebar.</p>"
-            )
-            fan = gr.HTML()
-            gr.Markdown("### Peluang naik per horizon")
-            gauge = gr.HTML()
-            gr.Markdown("### Kejujuran model vs tebakan sederhana")
-            gr.Markdown(
-                "<p class='micro'><b>Brier score</b> lebih rendah = lebih baik. "
-                "Jika model tidak mengalahkan base-rate, anggap sinyal lemah.</p>"
-            )
-            met = gr.HTML()
-            table = gr.Dataframe(label="Ringkasan angka", wrap=True)
-            report_file = gr.File(
-                label="Unduh laporan HTML lengkap (buka di tab baru setelah unduh)",
-                file_count="single",
-            )
+        # —— RESULTS (each chart in its own framed panel) ——
+        gr.HTML('<div class="section-title" style="margin:8px 4px">Hasil</div>')
+        summary = gr.HTML()
+        fan = gr.HTML()
+        gauge = gr.HTML()
+        met = gr.HTML()
 
-        # wiring: single search drives dropdown
+        with gr.Group(elem_classes=["card"]):
+            gr.HTML(
+                """
+                <div class="section-title">Tabel ringkas</div>
+                <p class="hint">Angka yang sama dengan grafik, dalam bentuk tabel.</p>
+                """
+            )
+            table = gr.Dataframe(label="Ringkasan", wrap=True, interactive=False)
+
+        with gr.Group(elem_classes=["card"]):
+            gr.HTML(
+                """
+                <div class="section-title">Laporan lengkap</div>
+                <p class="hint">Unduh file HTML, lalu buka di tab baru (bukan path server).</p>
+                """
+            )
+            report_file = gr.File(label="Unduh laporan HTML", file_count="single")
+
+        gr.HTML(
+            f'<p class="hint" style="text-align:center;margin-top:8px">'
+            f"Prism · riset · bukan saran investasi"
+            f'<span style="opacity:.45"> · {UX_BUILD}</span></p>'
+        )
+
         search.change(on_type_search, inputs=[search], outputs=[ticker])
         ticker.change(on_pick_ticker, inputs=[ticker, market], outputs=[market, status])
         market.change(on_market_change, inputs=[market], outputs=[market_hint])
@@ -482,14 +580,6 @@ def build_app():
             outputs=[summary, fan, gauge, met, table, report_file, run_status],
         )
 
-        gr.Markdown(
-            f"""
-<p class='micro' style="margin-top:16px">
-Prism · riset probabilitas saham · bukan saran investasi.
-<span style="opacity:0.5"> · {UX_BUILD}</span>
-</p>
-"""
-        )
     return demo
 
 
@@ -497,11 +587,14 @@ def launch_gui(
     share: bool | None = None,
     server_name: str = "0.0.0.0",
     server_port: int | None = None,
-    inline: bool = True,
+    **kwargs: Any,
 ) -> Any:
     import gradio as gr
 
-    print("[Prism] Gradio human UI ·", UX_BUILD)
+    GRADIO_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    print("[Prism] UI human v3 ·", UX_BUILD)
+    print("[Prism] Gradio export dir:", GRADIO_EXPORT_DIR)
+
     demo = build_app()
     in_colab = False
     try:
@@ -514,7 +607,7 @@ def launch_gui(
     if share is None:
         share = bool(in_colab)
 
-    kwargs: dict[str, Any] = {
+    launch_kwargs: dict[str, Any] = {
         "share": share,
         "show_error": True,
         "css": PRISM_CSS,
@@ -526,13 +619,21 @@ def launch_gui(
             font=gr.themes.GoogleFont("DM Sans"),
         ),
         "quiet": False,
+        # allow /tmp exports (and keep cwd)
+        "allowed_paths": [str(GRADIO_EXPORT_DIR), tempfile_dir()],
     }
     if server_port:
-        kwargs["server_port"] = server_port
+        launch_kwargs["server_port"] = server_port
+    launch_kwargs.update(kwargs)
+
     if in_colab:
-        print("[Prism] Colab: share=", share, "— charts are HTML embeds (not gr.Plot images)")
-        return demo.launch(**kwargs)
-    return demo.launch(server_name=server_name, **kwargs)
+        print("[Prism] Colab launch share=", share)
+        return demo.launch(**launch_kwargs)
+    return demo.launch(server_name=server_name, **launch_kwargs)
+
+
+def tempfile_dir() -> str:
+    return tempfile.gettempdir()
 
 
 def launch_prism(**kwargs):
