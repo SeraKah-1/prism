@@ -1,4 +1,4 @@
-"""Fan chart + metrics views. Works headless (write HTML/PNG)."""
+"""Polished Plotly charts — light editorial theme, cone-first."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,12 +7,26 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from stock_prob.design import (
+    ACCENT,
+    BG_ELEV,
+    BORDER,
+    CHART_LINE,
+    CHART_MEDIAN,
+    CONE_INNER,
+    CONE_OUTER,
+    DOWN,
+    FG,
+    FG_MUTED,
+    FONT,
+    UP,
+    plotly_layout_base,
+)
+
 try:
     import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
 except ImportError:  # pragma: no cover
     go = None
-    make_subplots = None
 
 
 def build_fan_figure(
@@ -22,70 +36,91 @@ def build_fan_figure(
     title: str = "Prediction cone",
     price_col: str = "close",
     date_col: str = "date",
+    animate: bool = True,
 ) -> Any:
     if go is None:
         raise ImportError("plotly required for fan charts")
 
-    fig = go.Figure()
     h = history.copy()
     h[date_col] = pd.to_datetime(h[date_col])
+    c = cone.copy()
+    c[date_col] = pd.to_datetime(c[date_col])
+
+    fig = go.Figure()
+
+    # History — ink line
     fig.add_trace(
         go.Scatter(
             x=h[date_col],
             y=h[price_col],
             mode="lines",
             name="Close",
-            line=dict(color="#1f77b4", width=2),
+            line=dict(color=CHART_LINE, width=2.2, shape="spline"),
+            hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.2f}<extra>Close</extra>",
         )
     )
 
-    c = cone.copy()
-    c[date_col] = pd.to_datetime(c[date_col])
-    # bands: p10-p90, p25-p75
+    # Outer 80% band
     if {"p10", "p90"}.issubset(c.columns):
         fig.add_trace(
             go.Scatter(
                 x=list(c[date_col]) + list(c[date_col][::-1]),
                 y=list(c["p90"]) + list(c["p10"][::-1]),
                 fill="toself",
-                fillcolor="rgba(31,119,180,0.15)",
-                line=dict(color="rgba(255,255,255,0)"),
-                name="80% cone",
+                fillcolor=CONE_OUTER,
+                line=dict(color="rgba(0,0,0,0)"),
+                name="80% band",
                 hoverinfo="skip",
             )
         )
+    # Inner 50% band
     if {"p25", "p75"}.issubset(c.columns):
         fig.add_trace(
             go.Scatter(
                 x=list(c[date_col]) + list(c[date_col][::-1]),
                 y=list(c["p75"]) + list(c["p25"][::-1]),
                 fill="toself",
-                fillcolor="rgba(31,119,180,0.28)",
-                line=dict(color="rgba(255,255,255,0)"),
-                name="50% cone",
+                fillcolor=CONE_INNER,
+                line=dict(color="rgba(0,0,0,0)"),
+                name="50% band",
                 hoverinfo="skip",
             )
         )
+    # Median
     if "p50" in c.columns:
         fig.add_trace(
             go.Scatter(
                 x=c[date_col],
                 y=c["p50"],
                 mode="lines",
-                name="Median",
-                line=dict(color="#ff7f0e", width=2, dash="dash"),
+                name="Median path",
+                line=dict(color=CHART_MEDIAN, width=2.4, dash="dot"),
+                hovertemplate="%{x|%Y-%m-%d}<br>median %{y:,.2f}<extra></extra>",
             )
         )
 
-    fig.update_layout(
-        title=title,
-        template="plotly_white",
-        xaxis_title="Date",
-        yaxis_title="Price",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        margin=dict(l=40, r=20, t=60, b=40),
-        height=480,
-    )
+    # Seam marker: last history point
+    if len(h):
+        fig.add_trace(
+            go.Scatter(
+                x=[h[date_col].iloc[-1]],
+                y=[h[price_col].iloc[-1]],
+                mode="markers",
+                name="Now",
+                marker=dict(size=10, color=ACCENT, line=dict(width=2, color=BG_ELEV)),
+                hovertemplate="Now %{y:,.2f}<extra></extra>",
+            )
+        )
+
+    layout = plotly_layout_base(height=500, title=title)
+    layout["yaxis"]["title"] = "Price"
+    layout["xaxis"]["title"] = ""
+    fig.update_layout(**layout)
+
+    if animate:
+        # Subtle fade-in via frames (satisfying without gimmick)
+        fig.update_layout(transition_duration=500)
+
     return fig
 
 
@@ -93,25 +128,85 @@ def build_metrics_figure(metrics: pd.DataFrame, title: str = "Brier vs baselines
     if go is None:
         raise ImportError("plotly required")
     fig = go.Figure()
-    if len(metrics) == 0:
+    if metrics is None or len(metrics) == 0:
+        fig.update_layout(**plotly_layout_base(320, title))
         return fig
-    x = metrics["horizon"].astype(str)
-    for col, name in [
-        ("brier_model", "Model"),
-        ("brier_base", "Base rate"),
-        ("brier_momentum", "Momentum"),
-    ]:
-        if col in metrics.columns:
-            fig.add_trace(go.Bar(name=name, x=x, y=metrics[col]))
-    fig.update_layout(
-        barmode="group",
-        title=title,
-        template="plotly_white",
-        yaxis_title="Brier (lower better)",
-        xaxis_title="Horizon (days)",
-        height=360,
-    )
+
+    x = metrics["horizon"].astype(str) + "d"
+    series = [
+        ("brier_model", "Model", ACCENT),
+        ("brier_base", "Base rate", FG_MUTED),
+        ("brier_momentum", "Momentum", "#a8a29e"),
+    ]
+    for col, name, color in series:
+        if col not in metrics.columns:
+            continue
+        fig.add_trace(
+            go.Bar(
+                name=name,
+                x=x,
+                y=metrics[col],
+                marker=dict(color=color, cornerradius=4),
+                hovertemplate="%{x}<br>%{y:.4f}<extra>" + name + "</extra>",
+            )
+        )
+    layout = plotly_layout_base(height=340, title=title)
+    layout["barmode"] = "group"
+    layout["bargap"] = 0.28
+    layout["yaxis"]["title"] = "Brier (lower better)"
+    layout["yaxis"]["gridcolor"] = "#ebe4d8"
+    fig.update_layout(**layout)
     return fig
+
+
+def build_prob_gauge_figure(probs: dict[str, float], title: str = "P(up) by horizon") -> Any:
+    """Horizontal conviction bars — readable at a glance."""
+    if go is None:
+        raise ImportError("plotly required")
+    items = sorted(
+        [(int(k), float(v)) for k, v in probs.items() if v == v],
+        key=lambda x: x[0],
+    )
+    if not items:
+        fig = go.Figure()
+        fig.update_layout(**plotly_layout_base(220, title))
+        return fig
+    hs = [f"{h}d" for h, _ in items]
+    vs = [p * 100 for _, p in items]
+    colors = [UP if p >= 50 else DOWN for p in vs]
+    fig = go.Figure(
+        go.Bar(
+            x=vs,
+            y=hs,
+            orientation="h",
+            marker=dict(color=colors, cornerradius=6),
+            text=[f"{v:.1f}%" for v in vs],
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="%{y}: %{x:.1f}%<extra></extra>",
+        )
+    )
+    layout = plotly_layout_base(height=220 + 28 * len(items), title=title)
+    layout["xaxis"] = dict(
+        range=[0, 100],
+        title="P(up) %",
+        gridcolor="#ebe4d8",
+        zeroline=False,
+    )
+    layout["yaxis"] = dict(autorange="reversed", title="")
+    fig.update_layout(**layout)
+    # neutral mid line
+    fig.add_vline(x=50, line_width=1, line_dash="dot", line_color=BORDER)
+    return fig
+
+
+def export_metrics_excel(path: str | Path, sheets: dict[str, pd.DataFrame]) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(path, engine="openpyxl") as w:
+        for name, df in sheets.items():
+            df.to_excel(w, sheet_name=str(name)[:31], index=False)
+    return path
 
 
 def write_html_report(
@@ -123,51 +218,16 @@ def write_html_report(
     probs: dict[str, float],
     meta: dict[str, Any],
 ) -> Path:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Legacy thin wrapper — prefer report_html.write_prism_report."""
+    from stock_prob.report_html import write_prism_report
+    from stock_prob.viewmodel import PrismViewModel
 
-    metrics_html = metrics_df.to_html(index=False, float_format=lambda x: f"{x:.4f}")
-    probs_html = "<ul>" + "".join(f"<li>h={k}: P(up)={v:.3f}</li>" for k, v in probs.items()) + "</ul>"
-    meta_html = "<ul>" + "".join(f"<li><b>{k}</b>: {v}</li>" for k, v in meta.items()) + "</ul>"
-
-    fan_div = fan_fig.to_html(full_html=False, include_plotlyjs="cdn") if fan_fig is not None else ""
-    met_div = (
-        metrics_fig.to_html(full_html=False, include_plotlyjs=False)
-        if metrics_fig is not None
-        else ""
+    vm = PrismViewModel(
+        ticker=str(meta.get("ticker", "")),
+        probs={str(k): float(v) for k, v in probs.items() if v == v},
+        metrics=metrics_df if metrics_df is not None else pd.DataFrame(),
+        run_id=str(meta.get("run_id", "")),
+        regime=str(meta.get("regime", "n/a")),
+        report_html="",
     )
-
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <title>SPE Report — {meta.get('ticker', '')}</title>
-  <style>
-    body {{ font-family: system-ui, sans-serif; margin: 24px; background: #f7f8fa; color: #1a1a1a; }}
-    h1,h2 {{ color: #0f2744; }}
-    .card {{ background: white; border-radius: 10px; padding: 16px 20px; margin-bottom: 16px;
-             box-shadow: 0 1px 3px rgba(0,0,0,.08); }}
-    table {{ border-collapse: collapse; width: 100%; font-size: 14px; }}
-    th, td {{ border-bottom: 1px solid #e5e7eb; padding: 6px 8px; text-align: left; }}
-  </style>
-</head>
-<body>
-  <h1>Prism — Run Report</h1>
-  <div class="card"><h2>Meta</h2>{meta_html}</div>
-  <div class="card"><h2>P(up) by horizon</h2>{probs_html}</div>
-  <div class="card"><h2>Fan chart</h2>{fan_div}</div>
-  <div class="card"><h2>Metrics vs baselines</h2>{met_div}{metrics_html}</div>
-</body>
-</html>
-"""
-    path.write_text(html)
-    return path
-
-
-def export_metrics_excel(path: str | Path, sheets: dict[str, pd.DataFrame]) -> Path:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with pd.ExcelWriter(path, engine="openpyxl") as w:
-        for name, df in sheets.items():
-            df.to_excel(w, sheet_name=name[:31], index=False)
-    return path
+    return write_prism_report(vm, Path(path))
