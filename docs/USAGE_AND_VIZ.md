@@ -1,4 +1,6 @@
-# Cara pakai & visualisasi SPE
+# Cara pakai & visualisasi — Prism
+
+Product name: **Prism** · Python import: `stock_prob` · Repo: [github.com/SeraKah-1/prism](https://github.com/SeraKah-1/prism)
 
 ## 1. Tiga cara pakai (tanpa bikin website)
 

@@ -1,6 +1,6 @@
-# TradingView indicators (SPE)
+# TradingView indicators — Prism
 
-Pine Script v5 indicators that **mirror SPE concepts** on the chart.
+Pine Script v5 indicators that **mirror Prism concepts** on the chart.
 
 > **Important:** TradingView cannot run the Python logistic / walk-forward lab.  
 > These scripts are **visual proxies** (triangulation, regime, vol cone).  

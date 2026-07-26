@@ -90,7 +90,7 @@ def render_result(result: dict[str, Any]) -> None:
         f"""
         <div style="font-family:system-ui;padding:12px 16px;background:#0f172a;color:#e2e8f0;
                     border-radius:12px;margin-bottom:12px">
-          <h2 style="margin:0 0 8px;color:#38bdf8">SPE — {ticker}</h2>
+          <h2 style="margin:0 0 8px;color:#38bdf8">Prism — {ticker}</h2>
           <div><b>run_id</b>: {result.get('run_id')}</div>
           <div><b>regime</b>: {regime} &nbsp;|&nbsp; <b>champion</b>: {champ.get('champion')}</div>
           <div><b>honesty_skill</b>: {honesty.get('honesty_skill')}
@@ -267,7 +267,7 @@ def launch_gui(
     header = W.HTML(
         """
         <div style="font-family:system-ui;margin-bottom:8px">
-          <h2 style="margin:0;color:#0ea5e9">Stock Probability Engine — Lab GUI</h2>
+          <h2 style="margin:0;color:#0ea5e9">Prism — Lab GUI</h2>
           <p style="margin:4px 0 0;color:#64748b">
             Change any ticker anytime · no web server · results render below
           </p>
@@ -297,7 +297,7 @@ def launch_tui() -> None:
     Simple terminal UI (no browser). Works in Colab terminal / local shell.
     """
     print("=" * 56)
-    print("  SPE Terminal UI (TUI)")
+    print("  Prism Terminal UI (TUI)")
     print("=" * 56)
     equity = input("Equity ticker [BBCA.JK]: ").strip() or "BBCA.JK"
     if equity.upper().endswith(".JK"):

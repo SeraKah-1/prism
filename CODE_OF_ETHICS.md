@@ -1,6 +1,6 @@
-# Ethics & Disclaimer
+# Ethics & Disclaimer — Prism
 
-This project is a **research and educational** probability laboratory for equity
+**Prism** is a **research and educational** probability laboratory for equity
 markets. It is **not** financial advice, a trading system, or a solicitation to
 buy or sell any security.
 

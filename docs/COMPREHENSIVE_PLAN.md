@@ -1,6 +1,6 @@
 # Stock Probability Engine — Comprehensive Ambitious Plan (v2)
 
-**Codename:** `stock-prob` → public name **Stock Probability Engine (SPE)**  
+**Codename:** `stock-prob` → public name **Prism**  
 **Vision class:** Full research *platform*, not a one-notebook MVP  
 **Compute philosophy:** **AI-agent swarm + Colab CPU** — time & boilerplate are not the bottleneck; scientific honesty is  
 **Persistence:** Google Drive (lab fridge) + Parquet lake + prediction/experiment ledgers + GitHub (published lab)  
