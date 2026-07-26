@@ -56,24 +56,12 @@ def test_horizons_toggle_select_all():
     )
     assert ALL_HORIZONS_LABEL in new_val
     assert "252 days (≈ 1 year)" in new_val
-    assert len([x for x in new_val if x != ALL_HORIZONS_LABEL]) == 5
+    assert len([x for x in new_val if x != ALL_HORIZONS_LABEL]) == len(ALL_HORIZON_LABELS)
 
 
 def test_horizons_toggle_uncheck_one_drops_all():
-    full = [ALL_HORIZONS_LABEL] + [
-        "5 days (≈ 1 week)",
-        "21 days (≈ 1 month)",
-        "63 days (≈ 1 quarter)",
-        "126 days (≈ 6 months)",
-        "252 days (≈ 1 year)",
-    ]
-    without_5 = [
-        ALL_HORIZONS_LABEL,
-        "21 days (≈ 1 month)",
-        "63 days (≈ 1 quarter)",
-        "126 days (≈ 6 months)",
-        "252 days (≈ 1 year)",
-    ]
+    full = [ALL_HORIZONS_LABEL] + list(ALL_HORIZON_LABELS)
+    without_5 = [ALL_HORIZONS_LABEL] + list(ALL_HORIZON_LABELS)[1:]
     _, new_val = on_horizons_toggle(without_5, prev=full)
     assert ALL_HORIZONS_LABEL not in new_val
     assert "5 days (≈ 1 week)" not in new_val
