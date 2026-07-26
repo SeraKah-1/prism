@@ -10,8 +10,8 @@ Influences (taste, not clone):
 from __future__ import annotations
 
 # Visible stamp so Colab users can verify they loaded the polished build
-UX_BUILD = "PRISM_UX_2026_07_26_HUMAN_V6"
-UX_LABEL = "Prism UX · horizon keys + inject-safe report · v6"
+UX_BUILD = "PRISM_UX_2026_07_26_HUMAN_V7"
+UX_LABEL = "Prism UX · matplotlib SVG charts · plain English · v7"
 
 # —— Tokens (light) ——
 BG = "#f6f3ee"          # warm paper
@@ -44,27 +44,13 @@ DUR_SLOW = "700ms"
 
 
 def plotly_layout_base(height: int = 460, title: str = "") -> dict:
+    """Deprecated: charts use matplotlib. Kept so old imports do not break."""
     return dict(
-        template="plotly_white",
         height=height,
-        title=dict(
-            text=title,
-            font=dict(family=FONT, size=15, color=FG),
-            x=0.0,
-            xanchor="left",
-        ),
-        font=dict(family=FONT, size=12, color=FG_MUTED),
+        title=title,
         paper_bgcolor=BG_ELEV,
         plot_bgcolor=BG_ELEV,
-        margin=dict(l=48, r=24, t=56, b=48),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            x=0,
-            bgcolor="rgba(0,0,0,0)",
-            font=dict(size=11, color=FG_MUTED),
-        ),
+        font=dict(family=FONT, size=12, color=FG_MUTED),
         xaxis=dict(
             showgrid=True,
             gridcolor=GRID,

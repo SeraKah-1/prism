@@ -1,6 +1,11 @@
-"""Polished Plotly charts — light editorial theme, cone-first."""
+"""Charts via matplotlib → inline SVG.
+
+Why not Plotly in Gradio: gr.HTML often blocks or fails to run Plotly's
+<script> + CDN. SVG needs no JS, no CDN, no JSON inject — it just shows.
+"""
 from __future__ import annotations
 
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -13,190 +18,248 @@ from stock_prob.design import (
     BORDER,
     CHART_LINE,
     CHART_MEDIAN,
-    CONE_INNER,
-    CONE_OUTER,
     DOWN,
     FG,
     FG_MUTED,
-    FONT,
+    GRID,
     UP,
-    plotly_layout_base,
 )
 
 try:
-    import plotly.graph_objects as go
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
 except ImportError:  # pragma: no cover
-    go = None
+    plt = None
+    Figure = Any  # type: ignore
+    mdates = None
+
+
+def _style_ax(ax) -> None:
+    ax.set_facecolor(BG_ELEV)
+    ax.figure.patch.set_facecolor(BG_ELEV)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color(BORDER)
+    ax.spines["bottom"].set_color(BORDER)
+    ax.tick_params(colors=FG_MUTED, labelsize=9)
+    ax.yaxis.label.set_color(FG_MUTED)
+    ax.xaxis.label.set_color(FG_MUTED)
+    ax.title.set_color(FG)
+    ax.grid(True, color=GRID, linewidth=0.8, alpha=0.9)
+    ax.set_axisbelow(True)
+
+
+def fig_to_html(fig: Any, *, height: int | None = None) -> str:
+    """Turn a matplotlib figure into inline SVG HTML (Gradio-safe)."""
+    if fig is None:
+        return '<p class="hint" style="padding:12px">Chart not available.</p>'
+    if isinstance(fig, str):
+        return fig
+    if plt is None:
+        return '<p class="hint" style="padding:12px">matplotlib is required for charts.</p>'
+    try:
+        if height and hasattr(fig, "set_size_inches"):
+            w, _ = fig.get_size_inches()
+            fig.set_size_inches(w, max(2.2, height / 96.0))
+        buf = StringIO()
+        fig.savefig(
+            buf,
+            format="svg",
+            bbox_inches="tight",
+            facecolor=fig.get_facecolor(),
+            edgecolor="none",
+        )
+        svg = buf.getvalue()
+        plt.close(fig)
+        # Strip XML declaration for cleaner embed
+        if svg.lstrip().startswith("<?xml"):
+            svg = svg.split("?>", 1)[-1]
+        return f'<div class="chart-svg" style="width:100%;overflow:auto">{svg}</div>'
+    except Exception as e:
+        try:
+            plt.close(fig)
+        except Exception:
+            pass
+        return f'<p class="hint" style="padding:12px">Chart render failed: {e}</p>'
 
 
 def build_fan_figure(
     history: pd.DataFrame,
     cone: pd.DataFrame,
     *,
-    title: str = "Prediction cone",
+    title: str = "Price range",
     price_col: str = "close",
     date_col: str = "date",
-    animate: bool = True,
+    animate: bool = False,  # kept for API compat; unused
 ) -> Any:
-    if go is None:
-        raise ImportError("plotly required for fan charts")
+    if plt is None:
+        raise ImportError("matplotlib required for charts")
 
     h = history.copy()
     h[date_col] = pd.to_datetime(h[date_col])
     c = cone.copy()
     c[date_col] = pd.to_datetime(c[date_col])
 
-    fig = go.Figure()
+    fig, ax = plt.subplots(figsize=(9.2, 4.2), dpi=120)
+    _style_ax(ax)
 
-    # History — ink line
-    fig.add_trace(
-        go.Scatter(
-            x=h[date_col],
-            y=h[price_col],
-            mode="lines",
-            name="Close",
-            line=dict(color=CHART_LINE, width=2.2, shape="spline"),
-            hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.2f}<extra>Close</extra>",
-        )
+    ax.plot(
+        h[date_col],
+        h[price_col].astype(float),
+        color=CHART_LINE,
+        lw=1.8,
+        label="Close",
+        zorder=3,
     )
 
-    # Outer 80% band
     if {"p10", "p90"}.issubset(c.columns):
-        fig.add_trace(
-            go.Scatter(
-                x=list(c[date_col]) + list(c[date_col][::-1]),
-                y=list(c["p90"]) + list(c["p10"][::-1]),
-                fill="toself",
-                fillcolor=CONE_OUTER,
-                line=dict(color="rgba(0,0,0,0)"),
-                name="80% band",
-                hoverinfo="skip",
-            )
+        ax.fill_between(
+            c[date_col],
+            c["p10"].astype(float),
+            c["p90"].astype(float),
+            color=ACCENT,
+            alpha=0.12,
+            label="80% band",
+            linewidth=0,
+            zorder=1,
         )
-    # Inner 50% band
     if {"p25", "p75"}.issubset(c.columns):
-        fig.add_trace(
-            go.Scatter(
-                x=list(c[date_col]) + list(c[date_col][::-1]),
-                y=list(c["p75"]) + list(c["p25"][::-1]),
-                fill="toself",
-                fillcolor=CONE_INNER,
-                line=dict(color="rgba(0,0,0,0)"),
-                name="50% band",
-                hoverinfo="skip",
-            )
+        ax.fill_between(
+            c[date_col],
+            c["p25"].astype(float),
+            c["p75"].astype(float),
+            color=ACCENT,
+            alpha=0.22,
+            label="50% band",
+            linewidth=0,
+            zorder=2,
         )
-    # Median
     if "p50" in c.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=c[date_col],
-                y=c["p50"],
-                mode="lines",
-                name="Median path",
-                line=dict(color=CHART_MEDIAN, width=2.4, dash="dot"),
-                hovertemplate="%{x|%Y-%m-%d}<br>median %{y:,.2f}<extra></extra>",
-            )
+        ax.plot(
+            c[date_col],
+            c["p50"].astype(float),
+            color=CHART_MEDIAN,
+            lw=1.8,
+            ls="--",
+            label="Median",
+            zorder=4,
         )
 
-    # Seam marker: last history point
     if len(h):
-        fig.add_trace(
-            go.Scatter(
-                x=[h[date_col].iloc[-1]],
-                y=[h[price_col].iloc[-1]],
-                mode="markers",
-                name="Now",
-                marker=dict(size=10, color=ACCENT, line=dict(width=2, color=BG_ELEV)),
-                hovertemplate="Now %{y:,.2f}<extra></extra>",
-            )
+        ax.scatter(
+            [h[date_col].iloc[-1]],
+            [float(h[price_col].iloc[-1])],
+            s=36,
+            color=ACCENT,
+            zorder=5,
+            edgecolors=BG_ELEV,
+            linewidths=1.2,
+            label="Now",
         )
 
-    layout = plotly_layout_base(height=500, title=title)
-    layout["yaxis"]["title"] = "Price"
-    layout["xaxis"]["title"] = ""
-    fig.update_layout(**layout)
-
-    if animate:
-        # Subtle fade-in via frames (satisfying without gimmick)
-        fig.update_layout(transition_duration=500)
-
+    ax.set_title(title, fontsize=12, fontweight="600", loc="left", pad=10)
+    ax.set_ylabel("Price")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=7))
+    fig.autofmt_xdate(rotation=0, ha="center")
+    leg = ax.legend(
+        loc="upper left",
+        frameon=False,
+        fontsize=8,
+        ncols=3,
+        labelcolor=FG_MUTED,
+    )
+    for t in leg.get_texts():
+        t.set_color(FG_MUTED)
+    fig.tight_layout()
     return fig
 
 
 def build_metrics_figure(metrics: pd.DataFrame, title: str = "Brier vs baselines") -> Any:
-    if go is None:
-        raise ImportError("plotly required")
-    fig = go.Figure()
+    if plt is None:
+        raise ImportError("matplotlib required for charts")
+
+    fig, ax = plt.subplots(figsize=(8.5, 3.4), dpi=120)
+    _style_ax(ax)
+
     if metrics is None or len(metrics) == 0:
-        fig.update_layout(**plotly_layout_base(320, title))
+        ax.set_title(title, fontsize=12, fontweight="600", loc="left", pad=10)
+        ax.text(0.5, 0.5, "No metrics", ha="center", va="center", color=FG_MUTED, transform=ax.transAxes)
+        fig.tight_layout()
         return fig
 
-    x = metrics["horizon"].astype(str) + "d"
+    x_labels = [f"{int(h)}d" for h in metrics["horizon"]]
+    x = np.arange(len(x_labels))
     series = [
         ("brier_model", "Model", ACCENT),
         ("brier_base", "Base rate", FG_MUTED),
         ("brier_momentum", "Momentum", "#a8a29e"),
     ]
-    for col, name, color in series:
-        if col not in metrics.columns:
-            continue
-        fig.add_trace(
-            go.Bar(
-                name=name,
-                x=x,
-                y=metrics[col],
-                marker=dict(color=color, cornerradius=4),
-                hovertemplate="%{x}<br>%{y:.4f}<extra>" + name + "</extra>",
-            )
-        )
-    layout = plotly_layout_base(height=340, title=title)
-    layout["barmode"] = "group"
-    layout["bargap"] = 0.28
-    layout["yaxis"]["title"] = "Brier (lower better)"
-    layout["yaxis"]["gridcolor"] = "#ebe4d8"
-    fig.update_layout(**layout)
+    present = [(col, name, color) for col, name, color in series if col in metrics.columns]
+    width = 0.8 / max(len(present), 1)
+    for i, (col, name, color) in enumerate(present):
+        vals = metrics[col].astype(float).values
+        ax.bar(x + i * width - (len(present) - 1) * width / 2, vals, width * 0.9, label=name, color=color, zorder=2)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(x_labels)
+    ax.set_ylabel("Brier (lower is better)")
+    ax.set_title(title, fontsize=12, fontweight="600", loc="left", pad=10)
+    ax.legend(loc="upper right", frameon=False, fontsize=8, labelcolor=FG_MUTED)
+    fig.tight_layout()
     return fig
 
 
 def build_prob_gauge_figure(probs: dict[str, float], title: str = "P(up) by horizon") -> Any:
-    """Horizontal conviction bars — readable at a glance."""
-    if go is None:
-        raise ImportError("plotly required")
-    items = sorted(
-        [(int(k), float(v)) for k, v in probs.items() if v == v],
-        key=lambda x: x[0],
-    )
+    """Horizontal bars for P(up) per time horizon."""
+    if plt is None:
+        raise ImportError("matplotlib required for charts")
+
+    from stock_prob.horizon_keys import parse_horizon_key
+
+    items = []
+    for k, v in (probs or {}).items():
+        h = parse_horizon_key(k)
+        if h is None:
+            continue
+        try:
+            pf = float(v)
+        except Exception:
+            continue
+        if pf == pf:
+            items.append((h, pf * 100))
+    items.sort(key=lambda x: x[0])
+
+    height = max(2.4, 1.2 + 0.45 * max(len(items), 1))
+    fig, ax = plt.subplots(figsize=(8.5, height), dpi=120)
+    _style_ax(ax)
+
     if not items:
-        fig = go.Figure()
-        fig.update_layout(**plotly_layout_base(220, title))
+        ax.set_title(title, fontsize=12, fontweight="600", loc="left", pad=10)
+        ax.text(0.5, 0.5, "No probabilities", ha="center", va="center", color=FG_MUTED, transform=ax.transAxes)
+        fig.tight_layout()
         return fig
-    hs = [f"{h}d" for h, _ in items]
-    vs = [p * 100 for _, p in items]
-    colors = [UP if p >= 50 else DOWN for p in vs]
-    fig = go.Figure(
-        go.Bar(
-            x=vs,
-            y=hs,
-            orientation="h",
-            marker=dict(color=colors, cornerradius=6),
-            text=[f"{v:.1f}%" for v in vs],
-            textposition="outside",
-            cliponaxis=False,
-            hovertemplate="%{y}: %{x:.1f}%<extra></extra>",
-        )
-    )
-    layout = plotly_layout_base(height=220 + 28 * len(items), title=title)
-    layout["xaxis"] = dict(
-        range=[0, 100],
-        title="P(up) %",
-        gridcolor="#ebe4d8",
-        zeroline=False,
-    )
-    layout["yaxis"] = dict(autorange="reversed", title="")
-    fig.update_layout(**layout)
-    # neutral mid line
-    fig.add_vline(x=50, line_width=1, line_dash="dot", line_color=BORDER)
+
+    labels = [f"{h}d" for h, _ in items]
+    vals = [v for _, v in items]
+    colors = [UP if v >= 50 else DOWN for v in vals]
+    y = np.arange(len(labels))
+
+    ax.barh(y, vals, color=colors, height=0.62, zorder=2)
+    ax.axvline(50, color=BORDER, ls=":", lw=1.2, zorder=1)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels)
+    ax.set_xlim(0, 100)
+    ax.invert_yaxis()
+    ax.set_xlabel("P(up) %")
+    ax.set_title(title, fontsize=12, fontweight="600", loc="left", pad=10)
+    for yi, v in zip(y, vals):
+        ax.text(min(v + 1.5, 96), yi, f"{v:.1f}%", va="center", ha="left", fontsize=9, color=FG_MUTED)
+    fig.tight_layout()
     return fig
 
 
@@ -231,7 +294,6 @@ def write_html_report(
         regime=str(meta.get("regime", "n/a")),
         report_html="",
     )
-    # Prefer full result dict if caller attached history/cones via meta
     if meta.get("_result"):
         from stock_prob.viewmodel import build_viewmodel
 

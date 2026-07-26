@@ -58,13 +58,7 @@ def bootstrap(install_extras: bool = True, try_drive: bool = False) -> dict:
     if try_drive:
         mount_drive_if_possible()
     if install_extras:
-        _pip_install(["arch", "kaleido==0.2.1", "xlsxwriter", "curl_cffi"])
-    try:
-        import plotly.io as pio
-
-        pio.renderers.default = "colab"
-    except Exception:
-        pass
+        _pip_install(["arch", "xlsxwriter", "curl_cffi", "matplotlib>=3.7"])
     base = detect_base()
     paths = ensure_dirs(base)
     # ensure src on path

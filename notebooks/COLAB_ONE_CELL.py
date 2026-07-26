@@ -21,7 +21,9 @@ subprocess.check_call(
     ["git", "clone", "--depth", "1", "https://github.com/SeraKah-1/prism.git", str(TARGET)]
 )
 os.chdir(TARGET)
-subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt", "gradio>=4.0"])
+subprocess.check_call(
+    [sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt", "gradio>=4.0", "matplotlib>=3.7"]
+)
 
 # 4) ONLY this src on path (prepend + remove drive stock-prob if present)
 sys.path = [p for p in sys.path if "stock-prob" not in p and "stock_prob" not in p]
@@ -38,11 +40,9 @@ print("THEME    :", BG, ACCENT)
 print("CWD      :", os.getcwd())
 print("=" * 64)
 assert stock_prob.__file__.startswith("/content/prism/"), stock_prob.__file__
-assert "HUMAN_V5" in UX_BUILD, f"Wrong build {UX_BUILD} — delete runtime and re-run"
-
-import plotly.io as pio
-pio.renderers.default = "colab"
+assert "HUMAN_V7" in UX_BUILD, f"Wrong build {UX_BUILD} — delete runtime and re-run"
 
 from stock_prob.ui_colab import launch_gui
+
 # Gradio on Colab uses share=True so you get a real UI (not stale widget output)
 launch_gui()

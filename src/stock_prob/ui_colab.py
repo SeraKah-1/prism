@@ -88,7 +88,12 @@ def render_result(result: dict[str, Any]) -> None:
 
     from stock_prob.report_html import write_prism_report
     from stock_prob.viewmodel import build_viewmodel
-    from stock_prob.viz import build_fan_figure, build_metrics_figure, build_prob_gauge_figure
+    from stock_prob.viz import (
+        build_fan_figure,
+        build_metrics_figure,
+        build_prob_gauge_figure,
+        fig_to_html,
+    )
 
     vm = build_viewmodel(result)
     if vm.art_dir:
@@ -100,12 +105,15 @@ def render_result(result: dict[str, Any]) -> None:
         display(HTML(p.read_text()))
     else:
         h = vm.primary_horizon()
-        if vm.history is not None and h in vm.cones:
-            build_fan_figure(vm.history, vm.cones[h]).show()
+        cone = vm.cones.get(h)
+        if cone is None:
+            cone = vm.cones.get(str(h))
+        if vm.history is not None and cone is not None:
+            display(HTML(fig_to_html(build_fan_figure(vm.history, cone))))
         if vm.probs:
-            build_prob_gauge_figure(vm.probs).show()
+            display(HTML(fig_to_html(build_prob_gauge_figure(vm.probs))))
         if vm.metrics is not None and len(vm.metrics):
-            build_metrics_figure(vm.metrics).show()
+            display(HTML(fig_to_html(build_metrics_figure(vm.metrics))))
 
 
 def launch_gui(**kwargs: Any) -> Any:

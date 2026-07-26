@@ -25,8 +25,6 @@ Open [Google Colab](https://colab.research.google.com/) → **New notebook** →
 
 import sys
 sys.path.insert(0, "src")
-import plotly.io as pio
-pio.renderers.default = "colab"
 
 from stock_prob.ui_colab import launch_gui
 launch_gui()  # Gradio UI: search, charts, report
@@ -37,7 +35,7 @@ launch_gui()  # Gradio UI: search, charts, report
 | 1 | **Search** company or symbol (`BBCA`, `bank central asia`, `AAPL`…) — live fetch, not a fixed list |
 | 2 | Pick a match from the dropdown (typeahead) |
 | 3 | Click **Run analysis** |
-| 4 | See **fan chart (cone)**, **P(up) table**, baseline metrics, HTML report path |
+| 4 | See **price range (fan chart)**, **P(up)**, baseline metrics, HTML report |
 
 **That’s the whole product loop.** No public website — Gradio runs in the notebook session.
 
@@ -56,8 +54,6 @@ ROOT = Path("/content/drive/MyDrive/prism")
 sys.path.insert(0, str(ROOT / "src"))
 %pip install -q -r {ROOT}/requirements.txt
 
-import plotly.io as pio
-pio.renderers.default = "colab"
 from stock_prob.ui_colab import launch_gui
 launch_gui()
 ```
