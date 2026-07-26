@@ -66,22 +66,36 @@ def run_pipeline(
     frames = fetch_universe(
         symbols, period=cfg.history_period, use_cache=use_cache, force_refresh=force_refresh
     )
+    # Heal short equity series (corrupt stub cache was writing 6-bar files)
+    if target in frames and len(frames[target]) < 40:
+        from stock_prob.ingest import fetch_symbol
+
+        frames[target] = fetch_symbol(
+            target, period="max", use_cache=True, force_refresh=True, min_bars=1
+        )
     panel = align_close_panel(frames)
     ctx = resolve_context_closes(panel, cfg.universe)
 
+    if target not in panel.columns:
+        raise ValueError(f"No price series for {target} after fetch.")
     eq_close = panel[target].dropna()
+    # Prefer native frame length if panel alignment dropped rows incorrectly
+    if len(eq_close) < 40 and target in frames and len(frames[target]) >= 40:
+        eq_close = frames[target].set_index("date")["close"].astype(float).dropna()
+
     feats = build_feature_frame(
         eq_close,
         domestic_close=ctx["domestic"],
         us_close=ctx["us"],
         macro_close=ctx["macro"],
-        window=cfg.rolling_window,
+        window=min(cfg.rolling_window, max(20, len(eq_close) // 3)),
     )
 
     # Live forecast — robust helper (cone even if logistic fails)
     if len(eq_close) < 40:
         raise ValueError(
-            f"History too short for {target}: {len(eq_close)} bars (need ~40+)."
+            f"History too short for {target}: {len(eq_close)} bars (need ~40+). "
+            f"Cache may be corrupt — try again; fetch will force-refresh short stubs."
         )
     live = compute_live_forecast(
         feats,
