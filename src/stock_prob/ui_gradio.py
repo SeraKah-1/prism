@@ -60,12 +60,21 @@ INDEX_PRESETS = {
     },
 }
 
+# Discrete forecast windows (trading days). "All time horizons" expands to every row.
 HORIZON_CHOICES = [
     ("5 days (≈ 1 week)", 5),
     ("21 days (≈ 1 month)", 21),
     ("63 days (≈ 1 quarter)", 63),
     ("126 days (≈ 6 months)", 126),
     ("252 days (≈ 1 year)", 252),
+]
+ALL_HORIZONS_LABEL = "All time horizons"
+ALL_HORIZON_DAYS = [h for _, h in HORIZON_CHOICES]
+ALL_HORIZON_LABELS = [lab for lab, _ in HORIZON_CHOICES]
+DEFAULT_HORIZON_LABELS = [
+    "5 days (≈ 1 week)",
+    "21 days (≈ 1 month)",
+    "252 days (≈ 1 year)",
 ]
 
 GRADIO_EXPORT_DIR = Path(tempfile.gettempdir()) / "prism_gradio_exports"
@@ -448,6 +457,82 @@ def _horizon_label(h: int) -> str:
     return mapping.get(int(h), f"{int(h)}d ahead")
 
 
+def _parse_horizon_label(horizon_label: str | None, default: int | None = None) -> int | None:
+    """
+    Map UI labels → trading-day horizon.
+
+    Chart radios use labels like ``5d · ~1 week``. Naively joining *all* digits
+    yields ``51`` (and ``211``, ``2521``…), so the fan chart never finds the
+    real cone and falls back to a wrong nearest match — looks stuck on one chart.
+    Always take the *first* digit group via ``parse_horizon_key``.
+    """
+    if horizon_label is None:
+        return default
+    s = str(horizon_label).strip()
+    if not s or s == "—":
+        return default
+    # Exact match against run-time checkbox labels
+    for lab, days in HORIZON_CHOICES:
+        if s == lab:
+            return int(days)
+    # Chart / sim short labels: "21d · ~1 month", "252d ahead", raw "21"
+    h = parse_horizon_key(s)
+    if h is not None:
+        return int(h)
+    return default
+
+
+def _resolve_horizon_days(horizon_labels: list[str] | None) -> list[int]:
+    """Expand checkbox selection; ``All time horizons`` → every discrete window."""
+    labels = [str(x) for x in (horizon_labels or []) if x]
+    if not labels or ALL_HORIZONS_LABEL in labels:
+        return list(ALL_HORIZON_DAYS)
+    label_to_h = {lab: h for lab, h in HORIZON_CHOICES}
+    hz: list[int] = []
+    for lab in labels:
+        if lab in label_to_h and label_to_h[lab] not in hz:
+            hz.append(label_to_h[lab])
+    return hz if hz else list(ALL_HORIZON_DAYS[:3])  # 5 / 21 / 252 fallback
+
+
+def on_horizons_toggle(selected: list[str] | None, prev: list[str] | None):
+    """
+    Keep ``All time horizons`` in sync with individual checkboxes.
+
+    - Tick All → every discrete window
+    - Untick any single window while All is on → drop All, keep the rest
+    - Tick every window manually → All turns on
+    """
+    import gradio as gr
+
+    sel = set(selected or [])
+    prev_set = set(prev or [])
+    added = sel - prev_set
+    removed = prev_set - sel
+    individuals_selected = [lab for lab in ALL_HORIZON_LABELS if lab in sel]
+
+    if ALL_HORIZONS_LABEL in added:
+        new_val = [ALL_HORIZONS_LABEL] + list(ALL_HORIZON_LABELS)
+    elif ALL_HORIZONS_LABEL in removed:
+        new_val = individuals_selected
+    elif removed.intersection(ALL_HORIZON_LABELS):
+        # One (or more) windows off → All cannot stay on
+        new_val = individuals_selected
+    elif set(ALL_HORIZON_LABELS).issubset(sel):
+        new_val = [ALL_HORIZONS_LABEL] + list(ALL_HORIZON_LABELS)
+    else:
+        new_val = individuals_selected
+
+    return (
+        gr.CheckboxGroup(
+            choices=[ALL_HORIZONS_LABEL] + list(ALL_HORIZON_LABELS),
+            value=new_val,
+            label="Time horizons",
+        ),
+        new_val,
+    )
+
+
 def _render_fan_from_session(session: dict[str, Any] | None, horizon_label: str | None) -> str:
     if not session or not session.get("history"):
         return _frame(
@@ -456,22 +541,15 @@ def _render_fan_from_session(session: dict[str, Any] | None, horizon_label: str 
             "<p class='hint'>No run data yet.</p>",
         )
     hist, cones = session_to_frames(session)
-    # parse selected horizon
-    h = None
-    if horizon_label:
-        # labels like "21d · ~1 month" or raw "21"
-        digits = "".join(ch for ch in str(horizon_label) if ch.isdigit())
-        if digits:
-            h = int(digits[:4]) if len(digits) > 3 else int(digits)
-        else:
-            h = parse_horizon_key(horizon_label)
+    hs = session.get("horizons") or sorted(cones.keys())
+    default_h = int(hs[0]) if hs else 21
+    h = _parse_horizon_label(horizon_label, default=default_h)
     if h is None:
-        hs = session.get("horizons") or sorted(cones.keys())
-        h = int(hs[0]) if hs else 21
+        h = default_h
     cone = cones.get(int(h))
     if cone is None and cones:
-        # nearest available
-        keys = sorted(cones.keys())
+        # Prefer exact match failure only — nearest as last resort
+        keys = sorted(int(k) for k in cones.keys())
         h = min(keys, key=lambda k: abs(k - int(h)))
         cone = cones[h]
 
@@ -490,11 +568,12 @@ def _render_fan_from_session(session: dict[str, Any] | None, horizon_label: str 
     except Exception as e:
         body = f"<p class='hint'>Chart failed: {e}</p>"
 
+    # Unique key in title + data-horizon so Gradio HTML re-renders on switch
     return _frame(
         f"Price range · {h}d ahead",
         "Solid vertical line = now. Dashed median = typical path. Green/red wash = above/below last. "
         "S/R = support & resistance. End labels = p10 / p50 / p90.",
-        body,
+        f'<div data-horizon="{int(h)}">{body}</div>',
         40,
     )
 
@@ -620,13 +699,7 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
         if symbol.upper().endswith(".JK") and domestic == "^GSPC":
             domestic = "^JKSE"
 
-        label_to_h = {lab: h for lab, h in HORIZON_CHOICES}
-        hz: list[int] = []
-        for lab in horizon_labels or []:
-            if lab in label_to_h:
-                hz.append(label_to_h[lab])
-        if not hz:
-            hz = [5, 21, 252]
+        hz = _resolve_horizon_days(horizon_labels)
 
         use_lab = _is_advanced(mode)
         mode_txt = "Advanced" if use_lab else "Standard"
@@ -919,11 +992,9 @@ def on_horizon_change(session: dict, horizon_label: str):
 def on_simulate(session: dict, entry_price: float, horizon_label: str, side: str):
     if not session:
         return simulate_html({"ok": False, "error": "Run analysis first."})
-    h = 21
-    if horizon_label:
-        digits = "".join(ch for ch in str(horizon_label) if ch.isdigit())
-        if digits:
-            h = int(digits[:4]) if len(digits) > 3 else int(digits)
+    hs = session.get("horizons") or []
+    default_h = int(hs[0]) if hs else 21
+    h = _parse_horizon_label(horizon_label, default=default_h) or default_h
     p_up = None
     for k, v in (session.get("probs") or {}).items():
         if parse_horizon_key(k) == h:
@@ -1006,12 +1077,13 @@ def build_app():
             gr.HTML(
                 """
                 <div class="section-title" style="margin-top:14px">3 · Time horizons</div>
-                <p class="hint">Trading days to forecast. Selected horizons appear as chart buttons after the run.</p>
+                <p class="hint">Trading days to forecast. Pick one or more, or <b>All time horizons</b> for every window (1w → 1y). Selected horizons become chart buttons after the run.</p>
                 """
             )
+            horizons_prev = gr.State(list(DEFAULT_HORIZON_LABELS))
             horizons = gr.CheckboxGroup(
-                choices=[lab for lab, _ in HORIZON_CHOICES],
-                value=["5 days (≈ 1 week)", "21 days (≈ 1 month)", "252 days (≈ 1 year)"],
+                choices=[ALL_HORIZONS_LABEL] + list(ALL_HORIZON_LABELS),
+                value=list(DEFAULT_HORIZON_LABELS),
                 label="Time horizons",
             )
 
@@ -1106,6 +1178,11 @@ def build_app():
         search.change(on_type_search, inputs=[search], outputs=[ticker])
         ticker.change(on_pick_ticker, inputs=[ticker, market], outputs=[market, status])
         market.change(on_market_change, inputs=[market], outputs=[market_hint])
+        horizons.change(
+            on_horizons_toggle,
+            inputs=[horizons, horizons_prev],
+            outputs=[horizons, horizons_prev],
+        )
 
         run_btn.click(
             run_analysis,
