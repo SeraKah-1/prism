@@ -21,6 +21,8 @@ from stock_prob.design import (
     FG_MUTED,
     FONT,
     UP,
+    UX_BUILD,
+    UX_LABEL,
 )
 from stock_prob.report_html import write_prism_report
 from stock_prob.tickers import (
@@ -388,12 +390,13 @@ def build_app():
 
     with gr.Blocks(title="Prism") as demo:
         gr.HTML(
-            """
+            f"""
             <div class="prism-hero">
-              <div class="prism-kicker">Prism</div>
+              <div class="prism-kicker">Prism · {UX_LABEL}</div>
               <h1>Probability desk</h1>
               <p>Search any name or symbol · live fetch · fan-chart cones · baseline honesty.
-              Light, editorial, no neon cosplay quant.</p>
+              Light warm paper UI — if you still see raw text fields only, you loaded an old copy.</p>
+              <p style="margin-top:8px;font-size:11px;color:#78716c;font-family:ui-monospace,monospace">build <b>{UX_BUILD}</b></p>
             </div>
             """
         )
