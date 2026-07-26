@@ -38,7 +38,7 @@ print("THEME    :", BG, ACCENT)
 print("CWD      :", os.getcwd())
 print("=" * 64)
 assert stock_prob.__file__.startswith("/content/prism/"), stock_prob.__file__
-assert "PRISM_UX_2026" in UX_BUILD, "Wrong build — delete runtime and re-run"
+assert "HUMAN_V3" in UX_BUILD, f"Wrong build {UX_BUILD} — delete runtime and re-run"
 
 import plotly.io as pio
 pio.renderers.default = "colab"
