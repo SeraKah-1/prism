@@ -116,7 +116,7 @@ def run_pipeline(
             random_state=cfg.random_state,
         )
 
-    # Walk-forward OOS
+    # Walk-forward OOS (fast GUI skips in-loop MC diagnostics)
     wf = walk_forward_equity(
         feats,
         eq_close,
@@ -126,6 +126,8 @@ def run_pipeline(
         rolling_window=cfg.rolling_window,
         mc_paths=min(cfg.mc_paths, 800),
         random_state=cfg.random_state,
+        cone_diagnostics=bool(getattr(cfg, "cone_diagnostics", True)),
+        max_oos_per_horizon=getattr(cfg, "max_oos_per_horizon", None),
     )
 
     run_id = new_run_id(prefix=cfg.run_name)

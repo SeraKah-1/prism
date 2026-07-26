@@ -31,12 +31,17 @@ def walk_forward_equity(
     rolling_window: int = 60,
     mc_paths: int = 1000,
     random_state: int = 42,
+    cone_diagnostics: bool = True,
+    max_oos_per_horizon: int | None = None,
 ) -> WalkForwardResult:
     """
     Expanding-window walk-forward for one equity feature frame.
 
     Training uses all past labeled rows (dense). Evaluation scores only
     embargo-spaced timestamps (gap = horizon) to reduce overlapping-label bias.
+
+    Fast GUI mode: cone_diagnostics=False (skip MC inside loop), larger refit_every,
+    max_oos_per_horizon to cap scored points.
     """
     close = close.reindex(features.index).astype(float)
     fcols = feature_columns(features)
@@ -74,10 +79,13 @@ def walk_forward_equity(
         model = None
         last_fit_pos = -10**9
         p_base = 0.5
+        oos_count = 0
 
         for i in range(train_floor, n):
             if not embargo_mask[i]:
                 continue
+            if max_oos_per_horizon is not None and oos_count >= max_oos_per_horizon:
+                break
 
             # Refit on all prior dense samples
             if model is None or (i - last_fit_pos) >= max(1, refit_every):
@@ -114,8 +122,11 @@ def walk_forward_equity(
                     "close": float(close.loc[dt]) if dt in close.index else np.nan,
                 }
             )
+            oos_count += 1
 
-            # Cone diagnostic using only history ≤ dt
+            # Cone diagnostic (expensive) — skip in fast GUI mode
+            if not cone_diagnostics:
+                continue
             hist = close.loc[:dt].dropna()
             if len(hist) > 30:
                 r = np.log(hist).diff().dropna()

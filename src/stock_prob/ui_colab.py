@@ -37,8 +37,15 @@ def run_once(
     horizons: list[int] | None = None,
     use_lab: bool = True,
     mc_paths: int = 800,
+    speed: str = "fast",
 ) -> dict[str, Any]:
-    """Programmatic one-shot run."""
+    """
+    Programmatic one-shot run.
+
+    speed:
+      - "fast" (default for GUI): fewer MC paths, coarser walk-forward, no in-loop cone MC
+      - "full": heavier research backtest (slower; Colab free is only ~2 CPUs)
+    """
     horizons = horizons or [5, 21, 252]
     equity = equity.strip()
     uni = universe_from_symbols(
@@ -52,16 +59,26 @@ def run_once(
     elif not equity.upper().endswith(".JK") and domestic_index.strip() in ("", "^JKSE"):
         uni.domestic_index = "^GSPC"
 
+    fast = (speed or "fast").lower() != "full"
+    # Colab free tier ≈ 2 CPUs: GPU does not accelerate logistic/GARCH/MC much
     cfg = RunConfig(
         universe=uni,
         horizons=list(horizons),
-        mc_paths=mc_paths,
-        min_train_rows=200,
+        mc_paths=min(mc_paths, 400) if fast else mc_paths,
+        min_train_rows=160 if fast else 200,
+        walkforward_refit_every=63 if fast else 21,
+        cone_diagnostics=not fast,
+        max_oos_per_horizon=40 if fast else None,
+        speed="fast" if fast else "full",
         run_name="gui",
     )
+    # Advanced lab on free Colab is slow; still allowed but user chooses Lanjutan
     root = get_project_root()
-    if use_lab:
+    if use_lab and not fast:
         return enrich_single(cfg, equity=equity, root=root, use_cache=True)
+    if use_lab and fast:
+        # light enrich still does GARCH once — skip full lab on fast for speed
+        return run_pipeline(cfg, equity=equity, root=root, use_cache=True)
     return run_pipeline(cfg, equity=equity, root=root, use_cache=True)
 
 

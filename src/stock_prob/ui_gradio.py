@@ -540,26 +540,30 @@ def run_analysis(ticker_label, market_preset, horizon_labels, mode, progress=Non
                 5,
                 f"Mengambil data & menghitung · {symbol}",
                 f"{name} · mode {mode_txt} · horizon {hz}. "
-                f"Langkah ini biasanya 15–45 detik (cache membuat run berikutnya lebih cepat).",
+                f"Ini sudah jalan di mesin Colab (biasanya ~2 CPU). "
+                f"Mode Standar ≈ beberapa detik; Lanjutan lebih lama. GPU Colab tidak mempercepat model ini.",
             ),
             _placeholder_frame("Kisaran harga (cone)", f"Mengunduh / cache harga {symbol}…"),
             _placeholder_frame("Peluang naik", "Menyiapkan fitur multi-faktor…"),
             _placeholder_frame("Kejujuran model", "Walk-forward belum jalan…"),
             empty_table,
             None,
-            _status(f"35% · Hitung model {symbol} (bisa 15–45 dtk)…", "running"),
+            _status(f"35% · Hitung di Colab · {symbol}…", "running"),
         )
         if progress is not None:
             progress(0.35, desc=f"Hitung model {symbol}…")
 
+        # Colab free = ~2 CPUs. "Standar" uses speed=fast (no in-loop MC, fewer OOS).
+        # "Lanjutan" uses fuller path (slower — GPU Colab does not help this stack).
         result = run_once(
             symbol,
             domestic_index=domestic,
             us_index=us_index,
             macro=macro,
             horizons=hz,
-            use_lab=use_lab,
-            mc_paths=900,
+            use_lab=use_lab and not str(mode).lower().startswith("standar"),
+            mc_paths=500 if not use_lab else 900,
+            speed="full" if use_lab else "fast",
         )
 
         # —— build viewmodel / charts ——

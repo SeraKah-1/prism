@@ -52,6 +52,10 @@ class RunConfig:
     min_train_rows: int = 252
     random_state: int = 42
     run_name: str = "default"
+    # GUI / Colab speed: skip in-loop MC diagnostics + cap OOS points
+    cone_diagnostics: bool = True
+    max_oos_per_horizon: int | None = None
+    speed: str = "full"  # "fast" | "full"
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
