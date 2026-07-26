@@ -29,17 +29,17 @@ import plotly.io as pio
 pio.renderers.default = "colab"
 
 from stock_prob.ui_colab import launch_gui
-launch_gui(default_equity="BBCA.JK")
+launch_gui()  # Gradio UI: search, charts, report
 ```
 
 | Step | Action |
 |:----:|--------|
-| 1 | Edit **Equity** (`BBCA.JK`, `TLKM.JK`, `AAPL`, …) |
-| 2 | Keep or change index / macro fields |
-| 3 | Click **▶ Run analysis** |
-| 4 | Scroll → **P(up)** table + **fan chart** + Brier vs baselines |
+| 1 | **Search** company or symbol (`BBCA`, `bank central asia`, `AAPL`…) — live fetch, not a fixed list |
+| 2 | Pick a match from the dropdown (typeahead) |
+| 3 | Click **Run analysis** |
+| 4 | See **fan chart (cone)**, **P(up) table**, baseline metrics, HTML report path |
 
-**That’s the whole product loop.** No website to deploy.
+**That’s the whole product loop.** No public website — Gradio runs in the notebook session.
 
 <details>
 <summary><b>Persist on Google Drive</b> (cache survives runtime reset)</summary>

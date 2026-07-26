@@ -194,102 +194,19 @@ def launch_gui(
     default_domestic: str = "^JKSE",
     default_us: str = "^GSPC",
     default_macro: str = "^VIX",
+    **kwargs: Any,
 ) -> Any:
     """
-    Launch interactive controls in Colab/Jupyter.
+    Launch Prism UI (Gradio): search/typeahead tickers, fan chart, metrics.
 
-    Usage in a notebook cell:
+    In Colab:
         from stock_prob.ui_colab import launch_gui
         launch_gui()
     """
-    try:
-        import ipywidgets as W
-        from IPython.display import clear_output, display
-    except ImportError as e:
-        raise ImportError("ipywidgets + IPython required for GUI") from e
+    # default_* kept for call-compat; Gradio resolves context from selected symbol
+    from stock_prob.ui_gradio import launch_gui as _gradio_launch
 
-    equity = W.Text(value=default_equity, description="Equity", style={"description_width": "90px"})
-    domestic = W.Text(value=default_domestic, description="Dom index")
-    us_idx = W.Text(value=default_us, description="US index")
-    macro = W.Text(value=default_macro, description="Macro")
-    horizons = W.SelectMultiple(
-        options=[5, 21, 63, 126, 252],
-        value=[5, 21, 252],
-        description="Horizons",
-        rows=5,
-    )
-    use_lab = W.Checkbox(value=True, description="Full lab (GARCH/regime/tournament)")
-    run_btn = W.Button(description="▶ Run analysis", button_style="primary", icon="play")
-    status = W.HTML(value="<i>Set tickers then click Run. Data is cached after first fetch.</i>")
-    out = W.Output()
-
-    def on_run(_):
-        with out:
-            clear_output(wait=True)
-            status.value = "<b style='color:#38bdf8'>Running…</b> (first fetch may take ~10–30s)"
-            try:
-                res = run_once(
-                    equity.value,
-                    domestic_index=domestic.value,
-                    us_index=us_idx.value,
-                    macro=macro.value,
-                    horizons=list(horizons.value) or [5, 21, 252],
-                    use_lab=bool(use_lab.value),
-                )
-                render_result(res)
-                status.value = (
-                    f"<b style='color:#4ade80'>Done.</b> run_id=<code>{res.get('run_id')}</code>"
-                )
-            except Exception:
-                status.value = "<b style='color:#f87171'>Error</b> — see traceback below"
-                traceback.print_exc()
-
-    run_btn.on_click(on_run)
-
-    # Presets
-    def preset_idx(_):
-        equity.value = "BBCA.JK"
-        domestic.value = "^JKSE"
-        us_idx.value = "^GSPC"
-        macro.value = "^VIX"
-
-    def preset_us(_):
-        equity.value = "AAPL"
-        domestic.value = "^GSPC"
-        us_idx.value = "^GSPC"
-        macro.value = "^VIX"
-
-    b_idx = W.Button(description="Preset IDX")
-    b_us = W.Button(description="Preset US")
-    b_idx.on_click(preset_idx)
-    b_us.on_click(preset_us)
-
-    header = W.HTML(
-        """
-        <div style="font-family:system-ui;margin-bottom:8px">
-          <h2 style="margin:0;color:#0ea5e9">Prism — Lab GUI</h2>
-          <p style="margin:4px 0 0;color:#64748b">
-            Change any ticker anytime · no web server · results render below
-          </p>
-        </div>
-        """
-    )
-    form = W.VBox(
-        [
-            header,
-            W.HBox([b_idx, b_us, use_lab]),
-            equity,
-            domestic,
-            us_idx,
-            macro,
-            horizons,
-            run_btn,
-            status,
-            out,
-        ]
-    )
-    display(form)
-    return form
+    return _gradio_launch(**kwargs)
 
 
 def launch_tui() -> None:
