@@ -151,24 +151,50 @@ def enrich_single(
             title=f"{target} — GARCH cone {primary_h}d [{regime}]",
         )
         metrics_fig = build_metrics_figure(base["metrics"], title=f"{target} Brier tournament inputs")
-        write_html_report(
-            art / "report_lab.html",
-            fan_fig=fan,
-            metrics_fig=metrics_fig,
-            metrics_df=base["metrics"],
-            probs={**{f"h{k}": v for k, v in live.items()}, **{f"ens_{k}": v for k, v in ens_probs.items()}},
-            meta={
-                "run_id": base["run_id"],
-                "ticker": target,
-                "regime": regime,
-                "regime_vol_mult": mult,
-                "garch_method": garch_meta.get(str(primary_h), {}).get("method"),
-                "spillover": spill,
-                "champion": champion,
-                "honesty_skill": hon.get("honesty_skill"),
-                "lab": "full",
-            },
-        )
+        # Use bare horizon keys ("5") not "h5" — "h5" breaks primary_horizon/int parse
+        clean_probs = {}
+        for k, v in (live or {}).items():
+            try:
+                clean_probs[str(int(k))] = float(v)
+            except Exception:
+                try:
+                    from stock_prob.horizon_keys import parse_horizon_key
+
+                    hk = parse_horizon_key(k)
+                    if hk is not None:
+                        clean_probs[str(hk)] = float(v)
+                except Exception:
+                    pass
+        try:
+            # Attach history/cones so report can render charts even if probs keys were messy
+            base_for_vm = dict(base)
+            base_for_vm["live_probs"] = clean_probs or live
+            if "history" not in base_for_vm and target in frames:
+                base_for_vm["history"] = frames[target][["date", "close"]].tail(400)
+            if garch_cones:
+                base_for_vm["live_cones"] = garch_cones
+            write_html_report(
+                art / "report_lab.html",
+                fan_fig=fan,
+                metrics_fig=metrics_fig,
+                metrics_df=base["metrics"],
+                probs=clean_probs,
+                meta={
+                    "run_id": base["run_id"],
+                    "ticker": target,
+                    "regime": regime,
+                    "regime_vol_mult": mult,
+                    "garch_method": garch_meta.get(str(primary_h), {}).get("method"),
+                    "spillover": spill,
+                    "champion": champion,
+                    "honesty_skill": hon.get("honesty_skill"),
+                    "lab": "full",
+                    "_result": base_for_vm,
+                },
+            )
+        except Exception as e:
+            # Never crash the whole analysis because of a report renderer bug
+            (art / "report_lab_error.txt").write_text(str(e))
 
     base["regime"] = regime
     base["garch_meta"] = garch_meta

@@ -219,15 +219,23 @@ def write_html_report(
     meta: dict[str, Any],
 ) -> Path:
     """Legacy thin wrapper — prefer report_html.write_prism_report."""
+    from stock_prob.horizon_keys import normalize_prob_map
     from stock_prob.report_html import write_prism_report
     from stock_prob.viewmodel import PrismViewModel
 
     vm = PrismViewModel(
         ticker=str(meta.get("ticker", "")),
-        probs={str(k): float(v) for k, v in probs.items() if v == v},
+        probs=normalize_prob_map(probs or {}),
         metrics=metrics_df if metrics_df is not None else pd.DataFrame(),
         run_id=str(meta.get("run_id", "")),
         regime=str(meta.get("regime", "n/a")),
         report_html="",
     )
+    # Prefer full result dict if caller attached history/cones via meta
+    if meta.get("_result"):
+        from stock_prob.viewmodel import build_viewmodel
+
+        vm = build_viewmodel(meta["_result"], name=str(meta.get("ticker", "")))
+        if probs:
+            vm.probs = normalize_prob_map(probs)
     return write_prism_report(vm, Path(path))

@@ -45,18 +45,32 @@ def write_prism_report(vm: PrismViewModel, path: str | Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     h = vm.primary_horizon()
-    cone = vm.cones.get(h)
+    cone = vm.cones.get(h) or vm.cones.get(str(h))
+    if cone is None and vm.cones:
+        # any cone
+        cone = next(iter(vm.cones.values()))
     fan = None
-    if vm.history is not None and len(vm.history) and cone is not None and len(cone):
-        fan = build_fan_figure(
-            vm.history,
-            cone,
-            title=f"{vm.ticker} · forward cone ({h}d) · {vm.regime}",
-        )
+    try:
+        if vm.history is not None and len(vm.history) and cone is not None and len(cone):
+            fan = build_fan_figure(
+                vm.history,
+                cone,
+                title=f"{vm.ticker} · forward cone ({h}d) · {vm.regime}",
+            )
+    except Exception:
+        fan = None
     met_fig = None
-    if vm.metrics is not None and len(vm.metrics):
-        met_fig = build_metrics_figure(vm.metrics, title="Brier score vs baselines")
-    gauge = build_prob_gauge_figure(vm.probs, title="Direction probability")
+    try:
+        if vm.metrics is not None and len(vm.metrics):
+            met_fig = build_metrics_figure(vm.metrics, title="Brier score vs baselines")
+    except Exception:
+        met_fig = None
+    gauge = None
+    try:
+        if vm.probs:
+            gauge = build_prob_gauge_figure(vm.probs, title="Direction probability")
+    except Exception:
+        gauge = None
 
     cards = vm.summary_cards()
     card_bits = []

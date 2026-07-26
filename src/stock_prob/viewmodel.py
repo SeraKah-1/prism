@@ -36,21 +36,41 @@ class PrismViewModel:
     forecast_errors: dict[str, str] = field(default_factory=dict)
 
     def primary_horizon(self) -> int:
-        if self.cones:
-            return int(sorted(self.cones.keys())[0])
-        if self.probs:
-            return int(sorted(self.probs.keys(), key=lambda x: int(x))[0])
+        from stock_prob.horizon_keys import parse_horizon_key
+
+        cone_hs = []
+        for k in self.cones.keys():
+            h = parse_horizon_key(k)
+            if h is not None:
+                cone_hs.append(h)
+        if cone_hs:
+            return int(sorted(cone_hs)[0])
+        prob_hs = []
+        for k in self.probs.keys():
+            h = parse_horizon_key(k)
+            if h is not None:
+                prob_hs.append(h)
+        if prob_hs:
+            return int(sorted(prob_hs)[0])
         return 21
 
     def summary_cards(self) -> list[dict[str, Any]]:
+        from stock_prob.horizon_keys import parse_horizon_key
+
         cards = []
-        for h, p in sorted(self.probs.items(), key=lambda x: int(x[0])):
+        items = []
+        for k, p in self.probs.items():
+            h = parse_horizon_key(k)
+            if h is None:
+                continue
             try:
                 pf = float(p)
             except Exception:
                 continue
             if not np.isfinite(pf):
                 continue
+            items.append((h, pf))
+        for h, pf in sorted(items, key=lambda x: x[0]):
             skill = self.brier_skill.get(str(h), self.brier_skill.get(h))
             cards.append(
                 {
@@ -199,30 +219,20 @@ def _cones_from_result(
 
 
 def build_viewmodel(result: dict[str, Any], *, name: str = "") -> PrismViewModel:
-    ticker = str(result.get("ticker") or "?")
-    raw_probs = result.get("live_probs") or {}
-    probs: dict[str, float] = {}
-    for k, v in raw_probs.items():
-        try:
-            pf = float(v)
-            if np.isfinite(pf):
-                probs[str(int(k) if str(k).isdigit() else k)] = pf
-        except Exception:
-            continue
+    from stock_prob.horizon_keys import normalize_prob_map, parse_horizon_key
 
-    # horizons for cones: from probs, result, or default
-    horizons: list[int] = []
-    for k in probs:
-        try:
-            horizons.append(int(k))
-        except Exception:
-            pass
+    ticker = str(result.get("ticker") or "?")
+    probs = normalize_prob_map(result.get("live_probs") or {})
+    # also accept ensemble-only if primary empty
+    if not probs and result.get("ensemble_live"):
+        probs = normalize_prob_map(result.get("ensemble_live"))
+
+    horizons: list[int] = [int(k) for k in probs.keys()]
     if not horizons:
         for h in result.get("horizons") or []:
-            try:
-                horizons.append(int(h))
-            except Exception:
-                pass
+            ph = parse_horizon_key(h)
+            if ph is not None:
+                horizons.append(ph)
     if not horizons:
         horizons = [5, 21, 252]
 
