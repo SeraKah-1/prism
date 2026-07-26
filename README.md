@@ -244,6 +244,8 @@ universe:
 **Primary metric:** Brier score (lower = better).  
 Also: cone coverage @80%, sharpness, hit rate (secondary), honesty skill.
 
+Full technical write-up: [`docs/METHODS_AND_IMPLEMENTATION.md`](docs/METHODS_AND_IMPLEMENTATION.md).
+
 ---
 
 ## TradingView (optional overlay)
